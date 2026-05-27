@@ -6,7 +6,7 @@
 
 - 工作区名称：`上架自动化`
 - 工作区绝对路径：`/Users/luogic/Code/上架自动化`
-- GitHub 仓库 SSH 地址：`未配置`
+- GitHub 仓库 SSH 地址：`git@github.com:PM-Bot-Kevin/listing-automation.git`
 - 正式环境类型：`本地正式环境`
 - 可能依赖的其他工作区：`无`
 
@@ -79,11 +79,10 @@ bash scripts/install_backup_launchagent.sh
 
 - GitHub 是代码备份，不是真实业务数据备份
 - `runtime/`、`releases/`、`current`、`release-log/`、`.env`、密钥、缓存、日志都不会备份进 GitHub
-- 当前还没有配置 GitHub SSH 远端；创建仓库后再执行：
+- 当前 GitHub SSH 远端：
 
 ```bash
-git remote add origin git@github.com:<owner>/<repo>.git
-git push -u origin main
+git@github.com:PM-Bot-Kevin/listing-automation.git
 ```
 
 详细说明见 [BACKUP.md](/Users/luogic/Code/上架自动化/BACKUP.md)。

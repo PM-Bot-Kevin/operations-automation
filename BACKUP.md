@@ -7,7 +7,7 @@
 ## 当前状态
 
 - 当前仓库已经具备手动备份脚本、自动备份脚本、自动巡检脚本、自动安装脚本
-- 当前还没有配置 GitHub SSH 远端，所以自动备份安装前需要先创建 GitHub 仓库
+- 当前 GitHub SSH 远端：`git@github.com:PM-Bot-Kevin/listing-automation.git`
 
 ## 手动备份
 
@@ -37,13 +37,17 @@ bash scripts/install_backup_launchagent.sh
 - 成功不通知
 - 失败发本机通知，并在 `.github_backup_logs/` 留日志
 
-## 创建 GitHub 仓库后的接入步骤
+## 当前接入口径
 
-1. 在 GitHub 创建一个新仓库，只保留 `main`
-2. 用 SSH 作为远端，例如：
+1. 远端固定为：
 
 ```bash
-git remote add origin git@github.com:<owner>/<repo>.git
+git@github.com:PM-Bot-Kevin/listing-automation.git
+```
+
+2. 首次推送：
+
+```bash
 git push -u origin main
 ```
 

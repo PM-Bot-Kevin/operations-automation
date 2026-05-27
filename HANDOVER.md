@@ -44,7 +44,7 @@ bash scripts/install_backup_launchagent.sh
 - GitHub 远端优先只认 SSH
 - 自动备份默认由 macOS `launchd` 执行
 - GitHub 是代码备份，不是真实业务数据备份
-- 当前如果还没建 GitHub 仓库，先建远端，再执行 `git remote add origin git@github.com:<owner>/<repo>.git`
+- 当前 GitHub SSH 远端固定为 `git@github.com:PM-Bot-Kevin/listing-automation.git`
 
 ## 跨工作区协作规则
 
