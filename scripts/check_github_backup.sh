@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${BACKUP_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-LABEL="${BACKUP_LABEL:-com.luogic.listing-automation.github-backup}"
+LABEL="${BACKUP_LABEL:-com.luogic.operations-automation.github-backup}"
 STATE_DIR="${BACKUP_STATE_DIR:-$HOME/Library/Application Support/repo-backup-monitor}"
 STATE_FILE="${BACKUP_STATE_FILE:-$STATE_DIR/${LABEL}.json}"
 OSASCRIPT_BIN="${BACKUP_OSASCRIPT_BIN:-/usr/bin/osascript}"
@@ -13,7 +13,7 @@ TODAY="${BACKUP_TODAY:-$("$DATE_BIN" '+%F')}"
 
 send_notification() {
   local reason="$1"
-  "$OSASCRIPT_BIN" -e "display notification \"${reason}\" with title \"上架自动化 GitHub 自动备份巡检提醒\" subtitle \"$("$DATE_BIN" '+%Y-%m-%d %H:%M:%S %z')\" " >/dev/null 2>&1
+  "$OSASCRIPT_BIN" -e "display notification \"${reason}\" with title \"运营自动化 GitHub 自动备份巡检提醒\" subtitle \"$("$DATE_BIN" '+%Y-%m-%d %H:%M:%S %z')\" " >/dev/null 2>&1
 }
 
 if [[ ! -f "$STATE_FILE" ]]; then

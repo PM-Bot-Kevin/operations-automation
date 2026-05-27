@@ -34,6 +34,12 @@ class WorkspaceGovernanceTests(unittest.TestCase):
 
     def test_governance_config_and_docs_record_required_policies(self) -> None:
         config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(config["workspace"]["name"], "运营自动化")
+        self.assertEqual(config["workspace"]["absolute_path"], str(REPO_ROOT))
+        self.assertEqual(
+            config["workspace"]["github_repository_ssh"],
+            "git@github.com:PM-Bot-Kevin/operations-automation.git",
+        )
         self.assertEqual(config["workspace"]["long_lived_branch"], "main")
         self.assertEqual(
             config["release_layout"]["required_entries"],
@@ -47,7 +53,9 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
+            (REPO_ROOT / "HANDOVER.md", "operations-automation"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),
+            (BACKUP_SCRIPT, 'com.luogic.operations-automation.github-backup'),
         ]:
             self.assertIn(fragment, path.read_text(encoding="utf-8"))
 
@@ -64,6 +72,19 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
             subprocess.run(["git", "config", "user.name", "Governance Test"], cwd=repo_dir, check=True, capture_output=True, text=True)
             subprocess.run(["git", "config", "user.email", "governance-test@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            config = json.loads((repo_dir / "config" / "workspace_governance.json").read_text(encoding="utf-8"))
+            config["workspace"]["absolute_path"] = str(repo_dir)
+            (repo_dir / "config" / "workspace_governance.json").write_text(
+                json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "remote", "add", "origin", config["workspace"]["github_repository_ssh"]],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
             subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
             subprocess.run(["git", "commit", "-m", "bootstrap"], cwd=repo_dir, check=True, capture_output=True, text=True)
 

@@ -27,6 +27,7 @@ bash scripts/rollback_workspace.sh --to <release-id>
 - 默认回滚到上一版
 - 只切代码版本，不回滚 `runtime/`
 - 会把回滚记录写入 `release-log/releases.jsonl`
+- 改名前的历史版本默认只保留作审计和极端兜底；日常回滚优先选择改名后的正式版本
 
 ## 查看历史
 

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLIST_DIR="${HOME}/Library/LaunchAgents"
-LABEL_BASE="${BACKUP_LABEL_BASE:-com.luogic.listing-automation.github-backup}"
+LABEL_BASE="${BACKUP_LABEL_BASE:-com.luogic.operations-automation.github-backup}"
 BACKUP_LABEL="${LABEL_BASE}"
 CHECK_LABEL="${LABEL_BASE}-check"
 BACKUP_PLIST="${PLIST_DIR}/${BACKUP_LABEL}.plist"

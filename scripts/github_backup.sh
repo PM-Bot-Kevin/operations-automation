@@ -8,7 +8,7 @@ MODE="manual"
 CUSTOM_MESSAGE=""
 REMOTE_NAME="${BACKUP_REMOTE_NAME:-origin}"
 EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"
-LABEL="${BACKUP_LABEL:-com.luogic.listing-automation.github-backup}"
+LABEL="${BACKUP_LABEL:-com.luogic.operations-automation.github-backup}"
 STATE_DIR="${BACKUP_STATE_DIR:-$HOME/Library/Application Support/repo-backup-monitor}"
 STATE_FILE="${BACKUP_STATE_FILE:-$STATE_DIR/${LABEL}.json}"
 LOG_DIR="${BACKUP_LOG_DIR:-$REPO_ROOT/.github_backup_logs}"
@@ -100,7 +100,7 @@ PY
 send_failure_notification() {
   local reason="$1"
   [[ "$MODE" == "auto" ]] || return 1
-  "$OSASCRIPT_BIN" -e "display notification \"${reason}\" with title \"上架自动化 GitHub 自动备份失败\" subtitle \"$(now)\" " >/dev/null 2>&1
+  "$OSASCRIPT_BIN" -e "display notification \"${reason}\" with title \"运营自动化 GitHub 自动备份失败\" subtitle \"$(now)\" " >/dev/null 2>&1
 }
 
 fail() {

@@ -72,6 +72,45 @@ def check_branch_policy(config: dict, errors: list[str]) -> None:
         errors.append(f"当前分支不是治理要求的 {expected_branch}: {current_branch}")
 
 
+def check_workspace_identity(config: dict, errors: list[str]) -> None:
+    workspace = config.get("workspace", {})
+    configured_path = workspace.get("absolute_path", "")
+    actual_path = str(REPO_ROOT.resolve())
+    if not configured_path:
+        errors.append("治理配置缺少工作区路径。")
+    else:
+        configured_resolved = str(Path(configured_path).resolve())
+        if configured_resolved != actual_path:
+            errors.append(f"治理配置里的工作区路径不匹配: {configured_path} != {actual_path}")
+
+    expected_remote = workspace.get("github_repository_ssh", "")
+    if expected_remote and not expected_remote.startswith("git@github.com:"):
+        errors.append(f"治理配置里的 GitHub SSH 远端不合法: {expected_remote}")
+        return
+
+    if not expected_remote:
+        errors.append("治理配置缺少 GitHub SSH 远端。")
+        return
+
+    try:
+        current_remote = (
+            subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=REPO_ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            .stdout.strip()
+        )
+    except subprocess.CalledProcessError as exc:
+        errors.append(f"无法读取 origin 远端: {exc}")
+        return
+
+    if current_remote != expected_remote:
+        errors.append(f"origin 远端与治理配置不一致: {current_remote} != {expected_remote}")
+
+
 def main() -> int:
     errors: list[str] = []
     if not CONFIG_PATH.exists():
@@ -83,6 +122,7 @@ def main() -> int:
     check_content_rules(config, errors)
     check_cross_workspace_rules(config, errors)
     check_branch_policy(config, errors)
+    check_workspace_identity(config, errors)
 
     if errors:
         print("工作区治理校验失败：", file=sys.stderr)

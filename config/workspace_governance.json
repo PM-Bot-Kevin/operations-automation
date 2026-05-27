@@ -1,8 +1,8 @@
 {
   "workspace": {
-    "name": "上架自动化",
-    "absolute_path": "/Users/luogic/Code/上架自动化",
-    "github_repository_ssh": "git@github.com:PM-Bot-Kevin/listing-automation.git",
+    "name": "运营自动化",
+    "absolute_path": "/Users/luogic/Code/运营自动化",
+    "github_repository_ssh": "git@github.com:PM-Bot-Kevin/operations-automation.git",
     "formal_environment_type": "本地正式环境",
     "long_lived_branch": "main",
     "upstream_dependencies": []

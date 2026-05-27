@@ -1,4 +1,4 @@
-# 上架自动化维护交接
+# 运营自动化维护交接
 
 ## 一句话口径
 
@@ -44,7 +44,13 @@ bash scripts/install_backup_launchagent.sh
 - GitHub 远端优先只认 SSH
 - 自动备份默认由 macOS `launchd` 执行
 - GitHub 是代码备份，不是真实业务数据备份
-- 当前 GitHub SSH 远端固定为 `git@github.com:PM-Bot-Kevin/listing-automation.git`
+- 当前 GitHub SSH 远端固定为 `git@github.com:PM-Bot-Kevin/operations-automation.git`
+
+## 改名维护备注
+
+- 这个工作区已从 `上架自动化 / listing-automation` 正式切换到 `运营自动化 / operations-automation`
+- 改名前的 `releases/` 历史快照保持只读，不回写新名字
+- 改名后的首个正式发布版本是后续常规回滚基线；改名前版本只用于审计和极端兜底
 
 ## 跨工作区协作规则
 

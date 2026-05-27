@@ -7,7 +7,7 @@
 ## 当前状态
 
 - 当前仓库已经具备手动备份脚本、自动备份脚本、自动巡检脚本、自动安装脚本
-- 当前 GitHub SSH 远端：`git@github.com:PM-Bot-Kevin/listing-automation.git`
+- 当前 GitHub SSH 远端：`git@github.com:PM-Bot-Kevin/operations-automation.git`
 
 ## 手动备份
 
@@ -42,7 +42,7 @@ bash scripts/install_backup_launchagent.sh
 1. 远端固定为：
 
 ```bash
-git@github.com:PM-Bot-Kevin/listing-automation.git
+git@github.com:PM-Bot-Kevin/operations-automation.git
 ```
 
 2. 首次推送：
