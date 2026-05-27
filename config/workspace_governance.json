@@ -1,0 +1,148 @@
+{
+  "workspace": {
+    "name": "上架自动化",
+    "absolute_path": "/Users/luogic/Code/上架自动化",
+    "github_repository_ssh": "",
+    "formal_environment_type": "本地正式环境",
+    "long_lived_branch": "main",
+    "upstream_dependencies": []
+  },
+  "required_files": [
+    {
+      "label": "治理配置",
+      "path": "config/workspace_governance.json"
+    },
+    {
+      "label": "治理校验脚本",
+      "path": "scripts/validate_workspace_governance.py"
+    },
+    {
+      "label": "正式发布脚本",
+      "path": "scripts/release_workspace.sh"
+    },
+    {
+      "label": "回滚脚本",
+      "path": "scripts/rollback_workspace.sh"
+    },
+    {
+      "label": "GitHub 手动备份脚本",
+      "path": "scripts/github_backup.sh"
+    },
+    {
+      "label": "GitHub 自动备份脚本",
+      "path": "scripts/github_backup_auto.sh"
+    },
+    {
+      "label": "GitHub 自动备份巡检脚本",
+      "path": "scripts/check_github_backup.sh"
+    },
+    {
+      "label": "GitHub 自动备份安装脚本",
+      "path": "scripts/install_backup_launchagent.sh"
+    },
+    {
+      "label": "维护文档",
+      "path": "docs/workspace_maintenance.md"
+    }
+  ],
+  "release_layout": {
+    "root": ".",
+    "required_entries": [
+      "releases",
+      "current",
+      "runtime",
+      "release-log"
+    ],
+    "log_file": "release-log/releases.jsonl"
+  },
+  "github_backup": {
+    "remote_name": "origin",
+    "branch": "main",
+    "require_ssh": true,
+    "automatic_schedule": {
+      "backup_time": "10:00",
+      "check_time": "10:20"
+    },
+    "code_only_notice": "GitHub 是代码备份，不是真实业务数据备份"
+  },
+  "cross_workspace": {
+    "policy_notice": "跨工作区只允许连接正式入口",
+    "allowed_entry_types": [
+      "cli_script",
+      "service_alias",
+      "http_endpoint",
+      "current_symlink"
+    ],
+    "forbidden_keywords": [
+      "worktree",
+      "mirror",
+      "镜像",
+      "临时",
+      "tmp",
+      "copy",
+      "复制",
+      "历史",
+      "archive"
+    ],
+    "dependencies": []
+  },
+  "content_rules": [
+    {
+      "label": "正式发布脚本必须先跑治理校验",
+      "path": "scripts/release_workspace.sh",
+      "must_contain": [
+        "python3 \"$REPO_ROOT/scripts/validate_workspace_governance.py\"",
+        "archive --format=tar HEAD"
+      ]
+    },
+    {
+      "label": "回滚脚本必须只切代码版本",
+      "path": "scripts/rollback_workspace.sh",
+      "must_contain": [
+        "switch_current_release \"$target_dir\"",
+        "回滚只切代码版本，不碰 runtime/"
+      ]
+    },
+    {
+      "label": "GitHub 备份脚本必须只认 main 和 SSH",
+      "path": "scripts/github_backup.sh",
+      "must_contain": [
+        "EXPECTED_BRANCH=\"${BACKUP_EXPECTED_BRANCH:-main}\"",
+        "git@github.com:"
+      ]
+    },
+    {
+      "label": "AGENTS 必须写入跨工作区正式入口规则",
+      "path": "AGENTS.md",
+      "must_contain": [
+        "只允许连接对方正式入口",
+        "默认禁止连接仓库镜像、临时副本、worktree、手工复制目录、历史目录"
+      ]
+    },
+    {
+      "label": "README 必须写入正式发布、回滚和 GitHub 备份口径",
+      "path": "README.md",
+      "must_contain": [
+        "发布前固定自动先跑治理校验",
+        "GitHub 是代码备份，不是真实业务数据备份",
+        "不允许默认连接仓库镜像、临时副本、worktree、历史目录、手工复制目录"
+      ]
+    },
+    {
+      "label": "交接文档必须写入正式发布、回滚和跨工作区规则",
+      "path": "HANDOVER.md",
+      "must_contain": [
+        "回滚只切代码版本，不碰 `runtime/`",
+        "只能调用对方正式入口"
+      ]
+    },
+    {
+      "label": "备份文档必须写入代码备份边界",
+      "path": "BACKUP.md",
+      "must_contain": [
+        "GitHub 备份只负责代码、文档、脚本、测试和配置模板",
+        "不负责真实业务数据"
+      ]
+    }
+  ]
+}

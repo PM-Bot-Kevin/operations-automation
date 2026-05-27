@@ -1,0 +1,11 @@
+releases/
+current
+runtime/
+release-log/
+.github_backup_logs/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+*.log

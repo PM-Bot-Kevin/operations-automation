@@ -1,0 +1,33 @@
+# 上架自动化 AGENTS
+
+## 协作规范
+- 默认用中文，先说结论，再给最小可执行动作。
+- 先看仓库里的正式文档和脚本，再动手，不要把聊天里的临时口径写成正式逻辑。
+- 小步改动，优先可审查、可回滚、可验证。
+- 用户明确要求直接执行时，直接做；没有明确要求时，先停在方案或排查阶段。
+
+## 工作区治理
+- 这个工作区长期只保留一个主分支：`main`。
+- 正式治理配置固定看 `config/workspace_governance.json`。
+- 正式治理校验固定走 `scripts/validate_workspace_governance.py`。
+- 正式发布固定走 `bash scripts/release_workspace.sh --summary "本次变更说明"`。
+- 正式回滚固定走 `bash scripts/rollback_workspace.sh --to <release-id>`，如果不传 `--to` 默认回到上一版。
+- GitHub 手动备份固定走 `bash scripts/github_backup.sh`。
+- GitHub 自动备份固定走 `bash scripts/install_backup_launchagent.sh` 安装到 macOS `launchd`。
+
+## 跨工作区协作规则
+- 当前工作区如果调用别的工作区能力，只允许连接对方正式入口。
+- 正式入口可以是已经对外承诺的 CLI 脚本、服务别名、固定 HTTP 地址，或者对方正式环境里的 `current` 入口。
+- 默认禁止连接仓库镜像、临时副本、worktree、手工复制目录、历史目录、聊天里随手给出的路径。
+- 以后如果新增跨工作区依赖，先改 `config/workspace_governance.json`、相关脚本和文档，再开始接入，不要只留在聊天里。
+
+## GitHub 备份规则
+- GitHub 远端优先只认 SSH。
+- GitHub 只备份代码、文档、脚本、测试和配置模板。
+- `.env`、密钥、缓存、正式运行数据、发布产物、日志都不能直接进 GitHub。
+- 自动备份默认每天 `10:00` 运行，`10:20` 自动巡检；成功不通知，失败保留日志并发本机通知。
+
+## 自测规则
+- 只要改了脚本、配置、文档或流程，就必须先自测再汇报。
+- 正式发布前必须自动先跑 `python3 scripts/validate_workspace_governance.py`，不能只靠人记。
+- 涉及发布、回滚、备份或治理规则时，至少跑一组对应测试。
