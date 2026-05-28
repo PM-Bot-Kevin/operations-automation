@@ -20,6 +20,7 @@ EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
 FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
+QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 
 
 class WorkspaceGovernanceTests(unittest.TestCase):
@@ -263,8 +264,10 @@ print(json.dumps(payload, ensure_ascii=False))
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["summary"]["missing_sku_orders"], 3)
             self.assertEqual(payload["summary"]["stores_involved"], 2)
+            self.assertEqual(payload["guardrails"]["max_orders_per_round"], 5)
             self.assertEqual(payload["stores"][0]["store_name"], "抱树的koala小姐")
             self.assertEqual(payload["stores"][0]["profile"]["directory"], "Profile 32")
+            self.assertEqual(payload["stores"][0]["suggested_rounds"], [["P1001", "P1002"]])
             self.assertEqual(payload["records"][0]["order_no"], "P1001")
             self.assertTrue(any("P3001" in warning for warning in payload["warnings"]))
 
@@ -367,6 +370,10 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             ["releases", "current", "runtime", "release-log"],
         )
         self.assertEqual(config["cross_workspace"]["dependencies"], [])
+        guardrails = json.loads(QIANFAN_GUARDRAILS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(guardrails["execution_defaults"]["max_orders_per_round"], 5)
+        self.assertTrue(guardrails["execution_defaults"]["single_store_only"])
+        self.assertTrue(guardrails["execution_defaults"]["fixed_interval_forbidden"])
 
         for path, fragment in [
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),
@@ -376,6 +383,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "按最小操作原则执行"),
             (REPO_ROOT / "README.md", "搜索之间不能使用固定时间间隔"),
             (REPO_ROOT / "README.md", "真实完整规格"),
+            (REPO_ROOT / "README.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
@@ -384,12 +393,20 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "最小操作"),
             (REPO_ROOT / "AGENTS.md", "fill_feishu_order_skus.py"),
             (REPO_ROOT / "AGENTS.md", "不能使用固定时间间隔"),
+            (REPO_ROOT / "AGENTS.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
             (REPO_ROOT / "HANDOVER.md", "默认优先复用用户现有的 Chrome 店铺资料"),
             (REPO_ROOT / "HANDOVER.md", "只做最小操作"),
             (REPO_ROOT / "HANDOVER.md", "真实完整规格"),
             (REPO_ROOT / "HANDOVER.md", "不能用固定时间间隔"),
+            (REPO_ROOT / "HANDOVER.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
+            (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),
+            (REPO_ROOT / "docs/xhs_qianfan_safety.md", "固定节奏连续查询"),
+            (REPO_ROOT / "docs/xhs_qianfan_safety.md", "先在飞书或别的外部表里把目标订单缩小到最少"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
             (REPO_ROOT / "HANDOVER.md", "operations-automation"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),

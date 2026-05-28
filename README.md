@@ -137,6 +137,7 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 - 重新打开后台页时，不依赖当前已有 tab
 - 涉及店铺后台时默认只读；未经用户明确允许，不做修改、删除、发货、备注、上传等写操作
 - 涉及店铺后台时按最小操作原则执行，尽量减少刷新、重复点击和无关跳转，优先在已有页面状态上完成读取
+- 涉及千帆后台的极度保守执行规则，以 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 为准，后续所有千帆需求默认共用
 
 ## 飞书 SKU 补齐
 
@@ -154,6 +155,7 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 - `apply` 只负责把已经确认好的真实规格写回飞书，不会碰千帆后台
 - 当前 `SKU` 列以千帆后台查到的真实完整规格为准，不再做颜色简写
 - 涉及千帆后台查询时，默认只允许串行、单店分批、低频执行
+- 极度保守口径下，默认一轮不超过 5 单；一轮结束后必须停一下，再决定是否继续下一轮
 - 搜索之间不能使用固定时间间隔，必须保持不规则停顿，避免形成明显的机器节奏
 - 由于 Chrome 正在使用中的真实资料会被浏览器锁住，这条链路默认继续复用你当前正在用的 Chrome 资料和页面状态执行，不另外复制一套长期资料
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我把好评表里的订单 SKU 补齐”或类似意思，助手应直接按这套流程执行，不要把命令行甩给你

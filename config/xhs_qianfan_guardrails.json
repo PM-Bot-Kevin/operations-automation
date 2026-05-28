@@ -1,0 +1,36 @@
+{
+  "policy_name": "xhs_qianfan_extreme_safe_readonly",
+  "version": 1,
+  "scope": "所有涉及小红书千帆后台的默认流程",
+  "principles": [
+    "店铺稳定优先于执行速度",
+    "默认只读，不修改后台业务数据",
+    "优先复用用户当前浏览器会话和页面状态",
+    "能少查就少查，先在飞书侧缩小目标范围"
+  ],
+  "execution_defaults": {
+    "single_store_only": true,
+    "max_orders_per_round": 5,
+    "require_round_break": true,
+    "fixed_interval_forbidden": true,
+    "prefer_irregular_pauses": true,
+    "page_refresh_forbidden": true,
+    "tab_hopping_forbidden": true,
+    "bulk_parallel_queries_forbidden": true,
+    "direct_api_query_forbidden": true,
+    "prefer_same_page_session": true
+  },
+  "abort_on": [
+    "出现验证码、登录异常或权限异常",
+    "页面明显变慢、频繁报错或结构异常",
+    "查询结果异常，无法稳定判断订单规格或状态",
+    "出现需要高频重复点击或刷新才能继续的情况"
+  ],
+  "default_flow": [
+    "先从飞书整理出真正要查的订单",
+    "按店铺拆分，只处理一个店铺",
+    "按每轮不超过5单的小批次慢查",
+    "每轮结束后停一会儿，再决定是否继续",
+    "查到结果后回写飞书，避免在千帆后台做写操作"
+  ]
+}

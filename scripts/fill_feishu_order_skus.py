@@ -27,6 +27,7 @@ DEFAULT_VIEW_ID = "vewbrIBKXE"
 DEFAULT_STORE_FIELD = "店铺"
 DEFAULT_ORDER_FIELD = "订单号"
 DEFAULT_SKU_FIELD = "SKU"
+DEFAULT_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 KNOWN_LARK_CLI_PATHS = [
     Path.home() / ".codex/skills/fill-product-db/node_modules/@larksuite/cli/bin/lark-cli",
 ]
@@ -46,6 +47,18 @@ class MissingSkuRecord:
     profile_directory: str | None
     profile_name: str | None
     profile_user_name: str | None
+
+
+def load_guardrails() -> dict[str, Any]:
+    if not DEFAULT_GUARDRAILS_PATH.exists():
+        raise FillSkuError(f"缺少千帆风控配置：{DEFAULT_GUARDRAILS_PATH}")
+    return json.loads(DEFAULT_GUARDRAILS_PATH.read_text(encoding="utf-8"))
+
+
+def chunk_orders(items: list[str], size: int) -> list[list[str]]:
+    if size <= 0:
+        return [items]
+    return [items[index:index + size] for index in range(0, len(items), size)]
 
 
 def parse_args() -> argparse.Namespace:
@@ -237,6 +250,9 @@ def profile_to_dict(profile: ChromeProfile | None) -> dict[str, Any] | None:
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     ensure_fill_intent(" ".join(args.query))
     lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+    guardrails = load_guardrails()
+    execution_defaults = guardrails.get("execution_defaults", {})
+    max_orders_per_round = int(execution_defaults.get("max_orders_per_round", 5) or 5)
     local_state_path = Path(args.local_state_path).expanduser().resolve()
     profiles = load_profiles(local_state_path)
     records = fetch_records(
@@ -298,17 +314,26 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     for store_name in sorted(grouped):
         batch = grouped[store_name]
         profile = store_profiles.get(batch[0].store_name, None) if batch[0].store_name else None
+        orders = [record.order_no for record in batch]
         stores.append(
             {
                 "store_name": store_name,
                 "order_count": len(batch),
                 "profile": profile_to_dict(profile),
-                "orders": [record.order_no for record in batch],
+                "orders": orders,
+                "suggested_rounds": chunk_orders(orders, max_orders_per_round),
             }
         )
 
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "guardrails": {
+            "policy_name": guardrails.get("policy_name", ""),
+            "max_orders_per_round": max_orders_per_round,
+            "single_store_only": bool(execution_defaults.get("single_store_only", True)),
+            "require_round_break": bool(execution_defaults.get("require_round_break", True)),
+            "fixed_interval_forbidden": bool(execution_defaults.get("fixed_interval_forbidden", True)),
+        },
         "summary": {
             "records_scanned": len(records),
             "missing_sku_orders": len(missing_records),
@@ -325,6 +350,7 @@ def render_plan_text(plan: dict[str, Any]) -> str:
     lines = [
         f"已整理出 {plan['summary']['missing_sku_orders']} 条缺 SKU 订单",
         f"涉及 {plan['summary']['stores_involved']} 个店铺",
+        f"默认每轮最多 {plan['guardrails']['max_orders_per_round']} 单",
     ]
     for store in plan["stores"]:
         profile = store["profile"]
@@ -332,7 +358,9 @@ def render_plan_text(plan: dict[str, Any]) -> str:
             profile_text = f"{profile['name']} / {profile['directory']}"
         else:
             profile_text = "未匹配到 Chrome 资料"
-        lines.append(f"- {store['store_name']}：{store['order_count']} 条，资料 {profile_text}")
+        lines.append(
+            f"- {store['store_name']}：{store['order_count']} 条，资料 {profile_text}，建议拆成 {len(store['suggested_rounds'])} 轮"
+        )
     if plan["warnings"]:
         lines.append("注意：")
         for warning in plan["warnings"]:
