@@ -9,3 +9,8 @@ __pycache__/
 .env
 .env.*
 *.log
+.artifacts/
+.playwright-mcp/
+checkin-card-*.png
+current-mobile-live.png
+live-page-last-checkin-*.png

@@ -33,6 +33,12 @@ bash scripts/install_backup_launchagent.sh
 - 默认输出位置固定是桌面，文件名固定为 `订单号_1`、`订单号_2` 这种格式。
 - 如果用户是在这个工作区里直接提需求，助手应直接执行，不要先把命令行甩给用户。
 
+## 临时产物规则
+
+- `.artifacts/` 是设计草图、页面快照、临时 HTML 产物目录，只用于本地排查和比对，不进 Git。
+- `.playwright-mcp/` 是浏览器自动化留下的页面快照和控制台日志目录，只用于调试，不进 Git。
+- 根目录不应长期堆放截图；如果临时生成了截图，统一收敛到 `.artifacts/` 下再忽略。
+
 ## 发布规则
 
 - 发布前会自动先跑 `python3 scripts/validate_workspace_governance.py`
