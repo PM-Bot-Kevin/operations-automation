@@ -17,10 +17,42 @@ RELEASE_SCRIPT = REPO_ROOT / "scripts" / "release_workspace.sh"
 ROLLBACK_SCRIPT = REPO_ROOT / "scripts" / "rollback_workspace.sh"
 BACKUP_SCRIPT = REPO_ROOT / "scripts" / "github_backup.sh"
 EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
+QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 
 
 class WorkspaceGovernanceTests(unittest.TestCase):
+    def test_qianfan_access_prefers_existing_chrome_profiles(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="chrome-local-state-") as temp_dir:
+            local_state = Path(temp_dir) / "Local State"
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Profile 36",
+                            "info_cache": {
+                                "Profile 32": {"name": "抱树的koala小姐", "user_name": ""},
+                                "Profile 36": {"name": "考拉小姐慢慢来", "user_name": ""},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            profiles = module.load_profiles(local_state)
+            self.assertEqual([profile.directory for profile in profiles], ["Profile 32", "Profile 36"])
+            resolved = module.resolve_profile(profiles, "考拉小姐慢慢来的店")
+            self.assertEqual(resolved.directory, "Profile 36")
+            self.assertIn("--profile-directory=Profile 36", module.open_page(resolved, "orders", dry_run=True))
+
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
         spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
         assert spec and spec.loader
@@ -179,11 +211,18 @@ else:
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),
             (REPO_ROOT / "README.md", "不允许默认连接仓库镜像、临时副本、worktree、历史目录、手工复制目录"),
             (REPO_ROOT / "README.md", "直接对助手说你的自然语言需求即可"),
+            (REPO_ROOT / "README.md", "涉及店铺后台时默认只读"),
+            (REPO_ROOT / "README.md", "按最小操作原则执行"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
+            (REPO_ROOT / "AGENTS.md", "优先复用用户现有的 Chrome 个人资料"),
+            (REPO_ROOT / "AGENTS.md", "默认行为必须是只读"),
+            (REPO_ROOT / "AGENTS.md", "最小操作"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
+            (REPO_ROOT / "HANDOVER.md", "默认优先复用用户现有的 Chrome 店铺资料"),
+            (REPO_ROOT / "HANDOVER.md", "只做最小操作"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
             (REPO_ROOT / "HANDOVER.md", "operations-automation"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),

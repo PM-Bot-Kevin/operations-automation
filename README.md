@@ -119,6 +119,25 @@ python3 scripts/export_feishu_order_images.py "导出最近5天的图片"
 - 日期筛选依据固定看 `上评日期`
 - 在 Codex 里使用这个工作区时，直接对助手说你的自然语言需求即可，助手应直接代为执行，不需要你自己跑命令
 
+## 千帆后台访问
+
+当前工作区已经支持复用你本机现有的 Chrome 店铺资料，重新打开小红书千帆后台页面，而不是强依赖某个已经打开的标签页。
+
+对应脚本：
+
+```bash
+python3 scripts/xhs_qianfan_access.py profiles
+python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --page orders
+python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --page aftersale
+```
+
+默认规则：
+
+- 优先复用本机现有 Chrome 店铺资料，不重复维护一套新资料
+- 重新打开后台页时，不依赖当前已有 tab
+- 涉及店铺后台时默认只读；未经用户明确允许，不做修改、删除、发货、备注、上传等写操作
+- 涉及店铺后台时按最小操作原则执行，尽量减少刷新、重复点击和无关跳转，优先在已有页面状态上完成读取
+
 ## 改名后的回滚口径
 
 - `releases/` 里改名前生成的历史版本保留不变，只用于审计和极端兜底
