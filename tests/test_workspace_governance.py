@@ -18,6 +18,7 @@ ROLLBACK_SCRIPT = REPO_ROOT / "scripts" / "rollback_workspace.sh"
 BACKUP_SCRIPT = REPO_ROOT / "scripts" / "github_backup.sh"
 EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
+FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 
 
@@ -178,6 +179,166 @@ else:
             self.assertTrue((export_dir / "P1001_2.jpg").exists())
             self.assertFalse((export_dir / "P2001_1.png").exists())
 
+    def test_fill_feishu_order_skus_supports_natural_language_intent(self) -> None:
+        spec = importlib.util.spec_from_file_location("fill_feishu_order_skus", FILL_SKUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        module.ensure_fill_intent("帮我把好评表里的订单SKU补齐")
+        module.ensure_fill_intent("把缺的规格补上")
+        module.ensure_fill_intent("查一下缺的sku")
+        with self.assertRaises(module.FillSkuError):
+            module.ensure_fill_intent("帮我导出今天要上的好评")
+
+    def test_fill_feishu_order_skus_plan_groups_missing_orders_by_store(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="feishu-sku-plan-") as temp_dir:
+            root = Path(temp_dir)
+            fake_cli = root / "fake-lark-cli.py"
+            fake_cli.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+
+args = sys.argv[1:]
+if args[:2] != ["base", "+record-list"]:
+    raise SystemExit(f"unexpected args: {args}")
+payload = {
+    "ok": True,
+    "data": {
+        "fields": ["店铺", "订单号", "SKU"],
+        "data": [
+            [["抱树的koala小姐"], "P1001", None],
+            [["抱树的koala小姐"], "P1002", ""],
+            [["考拉小姐慢慢来"], "P2001", "已存在规格"],
+            [None, "P3001", None]
+        ],
+        "record_id_list": ["rec1", "rec2", "rec3", "rec4"],
+        "has_more": False
+    }
+}
+print(json.dumps(payload, ensure_ascii=False))
+""",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            local_state = root / "Local State"
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Profile 32",
+                            "info_cache": {
+                                "Profile 32": {"name": "抱树的koala小姐", "user_name": ""},
+                                "Profile 36": {"name": "考拉小姐慢慢来", "user_name": ""},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(FILL_SKUS_SCRIPT),
+                    "plan",
+                    "帮我把好评表里的订单SKU补齐",
+                    "--lark-cli-bin",
+                    str(fake_cli),
+                    "--local-state-path",
+                    str(local_state),
+                    "--format",
+                    "json",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["summary"]["missing_sku_orders"], 3)
+            self.assertEqual(payload["summary"]["stores_involved"], 2)
+            self.assertEqual(payload["stores"][0]["store_name"], "抱树的koala小姐")
+            self.assertEqual(payload["stores"][0]["profile"]["directory"], "Profile 32")
+            self.assertEqual(payload["records"][0]["order_no"], "P1001")
+            self.assertTrue(any("P3001" in warning for warning in payload["warnings"]))
+
+    def test_fill_feishu_order_skus_apply_writes_real_values_per_record(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="feishu-sku-apply-") as temp_dir:
+            root = Path(temp_dir)
+            fake_cli = root / "fake-lark-cli.py"
+            log_file = root / "upserts.jsonl"
+            fake_cli.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+log_path = Path(os.environ["FAKE_LARK_LOG"]).resolve()
+if args[:2] != ["base", "+record-upsert"]:
+    raise SystemExit(f"unexpected args: {args}")
+record_id = args[args.index("--record-id") + 1]
+payload = args[args.index("--json") + 1]
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"record_id": record_id, "payload": json.loads(payload)}, ensure_ascii=False) + "\\n")
+print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=False))
+""",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            updates_file = root / "updates.json"
+            updates_file.write_text(
+                json.dumps(
+                    {
+                        "updates": [
+                            {"record_id": "rec1", "sku_value": "米白【常规】 S"},
+                            {"record_id": "rec2", "sku_value": "藏青色 加长 L"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(FILL_SKUS_SCRIPT),
+                    "apply",
+                    "--input-file",
+                    str(updates_file),
+                    "--lark-cli-bin",
+                    str(fake_cli),
+                    "--base-token",
+                    "base-token",
+                    "--table-id",
+                    "table-id",
+                ],
+                cwd=REPO_ROOT,
+                env={**os.environ, "PYTHONUTF8": "1", "FAKE_LARK_LOG": str(log_file)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertIn("已回写 2 条 SKU 到飞书。", completed.stdout)
+            log_lines = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                log_lines,
+                [
+                    {"record_id": "rec1", "payload": {"SKU": "米白【常规】 S"}},
+                    {"record_id": "rec2", "payload": {"SKU": "藏青色 加长 L"}},
+                ],
+            )
+
     def test_validate_script_passes_for_current_repo(self) -> None:
         completed = subprocess.run(
             ["python3", str(VALIDATE_SCRIPT)],
@@ -213,16 +374,22 @@ else:
             (REPO_ROOT / "README.md", "直接对助手说你的自然语言需求即可"),
             (REPO_ROOT / "README.md", "涉及店铺后台时默认只读"),
             (REPO_ROOT / "README.md", "按最小操作原则执行"),
+            (REPO_ROOT / "README.md", "搜索之间不能使用固定时间间隔"),
+            (REPO_ROOT / "README.md", "真实完整规格"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
             (REPO_ROOT / "AGENTS.md", "优先复用用户现有的 Chrome 个人资料"),
             (REPO_ROOT / "AGENTS.md", "默认行为必须是只读"),
             (REPO_ROOT / "AGENTS.md", "最小操作"),
+            (REPO_ROOT / "AGENTS.md", "fill_feishu_order_skus.py"),
+            (REPO_ROOT / "AGENTS.md", "不能使用固定时间间隔"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
             (REPO_ROOT / "HANDOVER.md", "默认优先复用用户现有的 Chrome 店铺资料"),
             (REPO_ROOT / "HANDOVER.md", "只做最小操作"),
+            (REPO_ROOT / "HANDOVER.md", "真实完整规格"),
+            (REPO_ROOT / "HANDOVER.md", "不能用固定时间间隔"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
             (REPO_ROOT / "HANDOVER.md", "operations-automation"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),
