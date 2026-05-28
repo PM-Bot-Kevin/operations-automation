@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 
@@ -19,6 +20,7 @@ BACKUP_SCRIPT = REPO_ROOT / "scripts" / "github_backup.sh"
 EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
 FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
+SYNC_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 
@@ -54,6 +56,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             resolved = module.resolve_profile(profiles, "考拉小姐慢慢来的店")
             self.assertEqual(resolved.directory, "Profile 36")
             self.assertIn("--profile-directory=Profile 36", module.open_page(resolved, "orders", dry_run=True))
+            self.assertIn("app-item/comment/analysis", module.open_page(resolved, "comments", dry_run=True))
 
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
         spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
@@ -342,6 +345,212 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
                 ],
             )
 
+    def test_sync_review_status_plan_groups_overdue_unchecked_records(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="review-status-plan-") as temp_dir:
+            root = Path(temp_dir)
+            fake_cli = root / "fake-lark-cli.py"
+            fake_cli.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+
+args = sys.argv[1:]
+if args[:2] != ["base", "+record-list"]:
+    raise SystemExit(f"unexpected args: {args}")
+payload = {
+    "ok": True,
+    "data": {
+        "fields": ["店铺", "订单号", "上评日期", "已上评"],
+        "data": [
+            [["抱树的koala小姐"], "P1001", "2026-05-27 00:00:00", None],
+            [["抱树的koala小姐"], "P1002", "2026-05-28 00:00:00", None],
+            [["考拉小姐慢慢来"], "P2001", "2026-05-26 00:00:00", True],
+            [["考拉小姐慢慢来"], "P2002", "2026-05-26 00:00:00", None],
+            [["考拉小姐慢慢来"], "P2003", None, None]
+        ],
+        "record_id_list": ["rec1", "rec2", "rec3", "rec4", "rec5"],
+        "has_more": False
+    }
+}
+print(json.dumps(payload, ensure_ascii=False))
+""",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            local_state = root / "Local State"
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Profile 36",
+                            "info_cache": {
+                                "Profile 32": {"name": "抱树的koala小姐", "user_name": ""},
+                                "Profile 36": {"name": "考拉小姐慢慢来", "user_name": ""},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SYNC_REVIEW_STATUS_SCRIPT),
+                    "plan",
+                    "--lark-cli-bin",
+                    str(fake_cli),
+                    "--local-state-path",
+                    str(local_state),
+                    "--today",
+                    "2026-05-28",
+                    "--format",
+                    "json",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["summary"]["pending_orders"], 2)
+            self.assertEqual(payload["summary"]["stores_involved"], 2)
+            self.assertEqual(payload["stores"][0]["store_name"], "抱树的koala小姐")
+            self.assertEqual(payload["stores"][0]["orders"], ["P1001"])
+            self.assertEqual(payload["stores"][1]["orders"], ["P2002"])
+
+    def test_sync_review_status_capture_export_prefers_desktop(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="review-status-export-") as temp_dir:
+            root = Path(temp_dir)
+            desktop_dir = root / "Desktop"
+            downloads_dir = root / "Downloads"
+            output_dir = root / "saved"
+            desktop_dir.mkdir()
+            downloads_dir.mkdir()
+
+            desktop_file = desktop_dir / "「评价导出-wps打开文件」"
+            desktop_file.write_text("desktop", encoding="utf-8")
+            downloads_file = downloads_dir / "评价导出.csv"
+            downloads_file.write_text("downloads", encoding="utf-8")
+
+            after = datetime(2026, 5, 28, 14, 0, 0).timestamp()
+            os.utime(desktop_file, (after + 10, after + 10))
+            os.utime(downloads_file, (after + 20, after + 20))
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SYNC_REVIEW_STATUS_SCRIPT),
+                    "capture-export",
+                    "--store",
+                    "抱树的koala小姐",
+                    "--after",
+                    "2026-05-28T14:00:00",
+                    "--desktop-dir",
+                    str(desktop_dir),
+                    "--downloads-dir",
+                    str(downloads_dir),
+                    "--output-dir",
+                    str(output_dir),
+                    "--format",
+                    "json",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            payload = json.loads(completed.stdout)
+            self.assertEqual(Path(payload["source_file"]).resolve(), desktop_file.resolve())
+            self.assertTrue(Path(payload["saved_file"]).exists())
+            self.assertEqual(Path(payload["saved_file"]).read_text(encoding="utf-8"), "desktop")
+
+    def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
+            root = Path(temp_dir)
+            fake_cli = root / "fake-lark-cli.py"
+            log_file = root / "upserts.jsonl"
+            fake_cli.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+log_path = Path(os.environ["FAKE_LARK_LOG"]).resolve()
+if args[:2] != ["base", "+record-upsert"]:
+    raise SystemExit(f"unexpected args: {args}")
+record_id = args[args.index("--record-id") + 1]
+payload = args[args.index("--json") + 1]
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps({"record_id": record_id, "payload": json.loads(payload)}, ensure_ascii=False) + "\\n")
+print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=False))
+""",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            plan_file = root / "plan.json"
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "records": [
+                                    {"record_id": "rec1", "order_no": "P1001"},
+                                    {"record_id": "rec2", "order_no": "P1002"},
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            export_file = root / "评价导出.csv"
+            export_file.write_text(
+                "订单id,商品名称\nP1002,测试商品\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(SYNC_REVIEW_STATUS_SCRIPT),
+                    "reconcile",
+                    "--plan-file",
+                    str(plan_file),
+                    "--export-file",
+                    str(export_file),
+                    "--apply",
+                    "--lark-cli-bin",
+                    str(fake_cli),
+                    "--base-token",
+                    "base-token",
+                    "--table-id",
+                    "table-id",
+                    "--format",
+                    "json",
+                ],
+                cwd=REPO_ROOT,
+                env={**os.environ, "PYTHONUTF8": "1", "FAKE_LARK_LOG": str(log_file)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["matched_orders"], ["P1002"])
+            self.assertEqual(payload["missing_orders"], ["P1001"])
+            log_lines = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(log_lines, [{"record_id": "rec2", "payload": {"已上评": True}}])
+
     def test_validate_script_passes_for_current_repo(self) -> None:
         completed = subprocess.run(
             ["python3", str(VALIDATE_SCRIPT)],
@@ -384,6 +593,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "搜索之间不能使用固定时间间隔"),
             (REPO_ROOT / "README.md", "真实完整规格"),
             (REPO_ROOT / "README.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "README.md", "已上评"),
+            (REPO_ROOT / "README.md", "14:00"),
             (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
@@ -394,6 +605,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "fill_feishu_order_skus.py"),
             (REPO_ROOT / "AGENTS.md", "不能使用固定时间间隔"),
             (REPO_ROOT / "AGENTS.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "AGENTS.md", "sync_feishu_review_status.py"),
+            (REPO_ROOT / "AGENTS.md", "14:00 主跑"),
             (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
@@ -402,6 +615,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "真实完整规格"),
             (REPO_ROOT / "HANDOVER.md", "不能用固定时间间隔"),
             (REPO_ROOT / "HANDOVER.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "HANDOVER.md", "14:00 主跑"),
+            (REPO_ROOT / "HANDOVER.md", "补跑"),
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),

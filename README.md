@@ -129,6 +129,7 @@ python3 scripts/export_feishu_order_images.py "导出最近5天的图片"
 python3 scripts/xhs_qianfan_access.py profiles
 python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --page orders
 python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --page aftersale
+python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --page comments
 ```
 
 默认规则：
@@ -159,6 +160,27 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 - 搜索之间不能使用固定时间间隔，必须保持不规则停顿，避免形成明显的机器节奏
 - 由于 Chrome 正在使用中的真实资料会被浏览器锁住，这条链路默认继续复用你当前正在用的 Chrome 资料和页面状态执行，不另外复制一套长期资料
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我把好评表里的订单 SKU 补齐”或类似意思，助手应直接按这套流程执行，不要把命令行甩给你
+
+## 飞书已上评同步
+
+当前工作区已经新增“好评表已上评自动同步”能力，对应脚本是 `scripts/sync_feishu_review_status.py`。
+
+这条能力的正式口径固定是：
+
+```text
+1. 先从飞书表里拉出“上评日期早于今天、且已上评未勾选”的记录
+2. 按店铺分组，到对应千帆评价管理页按日期范围搜索并全部导出
+3. 用导出 CSV 里的订单号回写飞书，把命中的订单勾选到“已上评”
+```
+
+- 千帆侧默认只走“评价管理页按日期范围导出”这一条主链路，不拿“逐单综合搜索”做备用方案
+- 默认只处理飞书表里的 `已上评` 字段，不在千帆后台做任何写操作
+- 导出文件默认先到桌面找，桌面没有新的，再去 `Downloads` 找
+- 导出文件列名口径固定按 `订单id` 匹配飞书 `订单号`
+- 定时任务默认按 `14:00` 主跑、`14:40` 补跑巡检；如果主跑失败或有遗漏，补跑会再做一轮，仍失败才通知
+- 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
+- 涉及千帆后台时，依然继续复用 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 里的极度保守口径
+- 在 Codex 里使用这个工作区时，如果你直接说“帮我同步已上评”或类似意思，助手应直接按这套流程执行，不要再临时发明别的链路
 
 ## 改名后的回滚口径
 

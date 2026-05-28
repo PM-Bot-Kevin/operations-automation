@@ -51,6 +51,10 @@
     {
       "label": "千帆风控文档",
       "path": "docs/xhs_qianfan_safety.md"
+    },
+    {
+      "label": "好评已上评同步脚本",
+      "path": "scripts/sync_feishu_review_status.py"
     }
   ],
   "release_layout": {

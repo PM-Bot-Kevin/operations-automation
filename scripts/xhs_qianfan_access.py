@@ -16,6 +16,7 @@ CHROME_APP_NAME = "Google Chrome"
 PAGE_URLS = {
     "orders": "https://ark.xiaohongshu.com/app-order/order/query",
     "aftersale": "https://ark.xiaohongshu.com/app-order/aftersale/list",
+    "comments": "https://ark.xiaohongshu.com/app-item/comment/analysis",
 }
 
 
