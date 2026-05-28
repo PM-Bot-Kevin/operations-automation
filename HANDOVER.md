@@ -24,6 +24,15 @@ bash scripts/github_backup.sh
 bash scripts/install_backup_launchagent.sh
 ```
 
+## 已固化业务能力
+
+- 当前仓库已经固化“飞书好评图片导出到桌面”能力，对应脚本是 `scripts/export_feishu_order_images.py`。
+- 这个能力的触发口径是自然语言，不要求固定句式。只要用户表达的是“导出某天 / 某段时间的好评、好评图片、图片”，就应该按同一流程执行。
+- 默认筛选字段固定看飞书表里的 `上评日期`。
+- 默认下载字段固定是 `配图`。
+- 默认输出位置固定是桌面，文件名固定为 `订单号_1`、`订单号_2` 这种格式。
+- 如果用户是在这个工作区里直接提需求，助手应直接执行，不要先把命令行甩给用户。
+
 ## 发布规则
 
 - 发布前会自动先跑 `python3 scripts/validate_workspace_governance.py`

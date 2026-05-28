@@ -87,6 +87,38 @@ git@github.com:PM-Bot-Kevin/operations-automation.git
 
 详细说明见 [BACKUP.md](/Users/luogic/Code/运营自动化/BACKUP.md)。
 
+## 飞书图片整理
+
+如果你只是想把飞书表里的好评图片直接导出到桌面，用一句自然语言就行：
+
+```bash
+python3 scripts/export_feishu_order_images.py "帮我导出今天要上的好评"
+```
+
+也支持这些说法：
+
+```bash
+python3 scripts/export_feishu_order_images.py "帮我导出明天要上的好评"
+python3 scripts/export_feishu_order_images.py "帮我导出近三天要上的好评"
+python3 scripts/export_feishu_order_images.py "帮我导出5月29号要上的好评"
+python3 scripts/export_feishu_order_images.py "把昨天的好评图片导出来"
+python3 scripts/export_feishu_order_images.py "导出最近5天的图片"
+```
+
+导出结果会直接放到桌面文件夹里，文件名按订单号命名：
+
+```text
+~/Desktop/好评图片_2026-05-29/
+  P795164060902509861_1.png
+  P795165179384467271_1.jpg
+  P795165179384467271_2.png
+```
+
+- 同一订单多张图会自动变成 `订单号_1`、`订单号_2`
+- 默认只下载 `配图` 字段
+- 日期筛选依据固定看 `上评日期`
+- 在 Codex 里使用这个工作区时，直接对助手说你的自然语言需求即可，助手应直接代为执行，不需要你自己跑命令
+
 ## 改名后的回滚口径
 
 - `releases/` 里改名前生成的历史版本保留不变，只用于审计和极端兜底

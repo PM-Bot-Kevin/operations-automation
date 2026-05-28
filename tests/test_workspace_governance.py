@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,10 +16,136 @@ VALIDATE_SCRIPT = REPO_ROOT / "scripts" / "validate_workspace_governance.py"
 RELEASE_SCRIPT = REPO_ROOT / "scripts" / "release_workspace.sh"
 ROLLBACK_SCRIPT = REPO_ROOT / "scripts" / "rollback_workspace.sh"
 BACKUP_SCRIPT = REPO_ROOT / "scripts" / "github_backup.sh"
+EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 
 
 class WorkspaceGovernanceTests(unittest.TestCase):
+    def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
+        spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        today = module.date(2026, 5, 28)
+        self.assertEqual(
+            module.parse_date_window("帮我导出今天要上的好评", today),
+            module.DateWindow(module.date(2026, 5, 28), module.date(2026, 5, 28)),
+        )
+        self.assertEqual(
+            module.parse_date_window("帮我导出明天要上的好评", today),
+            module.DateWindow(module.date(2026, 5, 29), module.date(2026, 5, 29)),
+        )
+        self.assertEqual(
+            module.parse_date_window("帮我导出昨天的好评", today),
+            module.DateWindow(module.date(2026, 5, 27), module.date(2026, 5, 27)),
+        )
+        self.assertEqual(
+            module.parse_date_window("帮我导出近三天要上的好评", today),
+            module.DateWindow(module.date(2026, 5, 28), module.date(2026, 5, 30)),
+        )
+        self.assertEqual(
+            module.parse_date_window("帮我导出5月29号要上的好评", today),
+            module.DateWindow(module.date(2026, 5, 29), module.date(2026, 5, 29)),
+        )
+        self.assertEqual(
+            module.parse_date_window("把昨天的好评图片导出来", today),
+            module.DateWindow(module.date(2026, 5, 27), module.date(2026, 5, 27)),
+        )
+        self.assertEqual(
+            module.parse_date_window("导出最近5天的图片", today),
+            module.DateWindow(module.date(2026, 5, 28), module.date(2026, 6, 1)),
+        )
+
+    def test_export_feishu_order_images_downloads_to_desktop_with_order_suffixes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="feishu-export-") as temp_dir:
+            root = Path(temp_dir)
+            fake_cli = root / "fake-lark-cli.py"
+            fake_cli.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[:2] == ["base", "+record-list"]:
+    offset = int(args[args.index("--offset") + 1])
+    payload = {
+        0: {
+            "ok": True,
+            "data": {
+                "fields": ["订单号", "上评日期", "配图"],
+                "data": [[
+                    "P1001",
+                    "2026-05-28 00:00:00",
+                    [{"file_token": "file_a", "name": "A 1.png"}]
+                ]],
+                "record_id_list": ["rec1"],
+                "has_more": True
+            }
+        },
+        1: {
+            "ok": True,
+            "data": {
+                "fields": ["订单号", "上评日期", "配图"],
+                "data": [
+                    [
+                        "P1001",
+                        "2026-05-28 00:00:00",
+                        [{"file_token": "file_b", "name": "B.jpg"}]
+                    ],
+                    [
+                        "P2001",
+                        "2026-05-29 00:00:00",
+                        [{"file_token": "file_c", "name": "C.png"}]
+                    ]
+                ],
+                "record_id_list": ["rec2", "rec3"],
+                "has_more": False
+            }
+        }
+    }[offset]
+    print(json.dumps(payload, ensure_ascii=False))
+elif args[:2] == ["docs", "+media-download"]:
+    output = args[args.index("--output") + 1]
+    target = Path.cwd() / output[2:]
+    target.write_bytes(b"test-image")
+    print(json.dumps({"ok": True, "data": {"saved_path": str(target)}}, ensure_ascii=False))
+else:
+    raise SystemExit(f"unexpected args: {args}")
+""",
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+            desktop_dir = root / "desktop"
+
+            completed = subprocess.run(
+                [
+                    "python3",
+                    str(EXPORT_IMAGES_SCRIPT),
+                    "帮我导出今天要上的好评",
+                    "--lark-cli-bin",
+                    str(fake_cli),
+                    "--desktop-dir",
+                    str(desktop_dir),
+                    "--today",
+                    "2026-05-28",
+                    "--limit",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertIn("已导出 2 张图片", completed.stdout)
+            export_dir = desktop_dir / "好评图片_2026-05-28"
+            self.assertTrue((export_dir / "P1001_1.png").exists())
+            self.assertTrue((export_dir / "P1001_2.jpg").exists())
+            self.assertFalse((export_dir / "P2001_1.png").exists())
+
     def test_validate_script_passes_for_current_repo(self) -> None:
         completed = subprocess.run(
             ["python3", str(VALIDATE_SCRIPT)],
@@ -50,8 +178,12 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         for path, fragment in [
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),
             (REPO_ROOT / "README.md", "不允许默认连接仓库镜像、临时副本、worktree、历史目录、手工复制目录"),
+            (REPO_ROOT / "README.md", "直接对助手说你的自然语言需求即可"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
+            (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
+            (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
+            (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
             (REPO_ROOT / "HANDOVER.md", "operations-automation"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),
