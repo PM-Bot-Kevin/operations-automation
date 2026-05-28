@@ -55,8 +55,28 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             self.assertEqual([profile.directory for profile in profiles], ["Profile 32", "Profile 36"])
             resolved = module.resolve_profile(profiles, "考拉小姐慢慢来的店")
             self.assertEqual(resolved.directory, "Profile 36")
+            self.assertIn("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", module.open_page(resolved, "orders", dry_run=True))
             self.assertIn("--profile-directory=Profile 36", module.open_page(resolved, "orders", dry_run=True))
+            self.assertIn("--new-window", module.open_page(resolved, "orders", dry_run=True))
             self.assertIn("app-item/comment/analysis", module.open_page(resolved, "comments", dry_run=True))
+
+    def test_qianfan_access_element_center_uses_position_and_size(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        element = module.ChromeUiElement(
+            index=1,
+            role="AXButton",
+            title="搜索",
+            description="",
+            value="",
+            position=(100, 200),
+            size=(60, 20),
+        )
+        self.assertEqual(module.element_center(element), (130, 210))
 
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
         spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
@@ -469,6 +489,36 @@ print(json.dumps(payload, ensure_ascii=False))
             self.assertTrue(Path(payload["saved_file"]).exists())
             self.assertEqual(Path(payload["saved_file"]).read_text(encoding="utf-8"), "desktop")
 
+    def test_sync_review_status_locates_comment_controls_and_waits_for_stable_export(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        snapshot = {
+            "elements": [
+                module.ChromeUiElement(10, "AXStaticText", "", "", "评价时间", (100, 200), (40, 20)),
+                module.ChromeUiElement(11, "AXTextField", "", "", "", (200, 200), (80, 20)),
+                module.ChromeUiElement(12, "AXTextField", "", "", "", (300, 200), (80, 20)),
+                module.ChromeUiElement(13, "AXButton", "搜索", "", "", (420, 200), (60, 24)),
+                module.ChromeUiElement(14, "AXButton", "全部导出", "", "", (520, 200), (80, 24)),
+            ]
+        }
+        controls = module.locate_comment_page_controls(snapshot)
+        self.assertEqual(controls["start_date_field"].index, 11)
+        self.assertEqual(controls["end_date_field"].index, 12)
+        self.assertEqual(controls["search_button"].title, "搜索")
+        self.assertEqual(controls["export_button"].title, "全部导出")
+
+        with tempfile.TemporaryDirectory(prefix="review-status-stable-file-") as temp_dir:
+            export_file = Path(temp_dir) / "评价导出.csv"
+            export_file.write_text("订单id\nP1001\n", encoding="utf-8")
+            self.assertTrue(module.file_is_stable(export_file, stable_seconds=0.05))
+
+            export_file.write_text("", encoding="utf-8")
+            self.assertFalse(module.file_is_stable(export_file, stable_seconds=0.05))
+
     def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
             root = Path(temp_dir)
@@ -595,6 +645,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "README.md", "已上评"),
             (REPO_ROOT / "README.md", "14:00"),
+            (REPO_ROOT / "README.md", "install_review_status_launchagent.sh"),
+            (REPO_ROOT / "README.md", "自动删除"),
             (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
@@ -607,6 +659,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "AGENTS.md", "sync_feishu_review_status.py"),
             (REPO_ROOT / "AGENTS.md", "14:00 主跑"),
+            (REPO_ROOT / "AGENTS.md", "install_review_status_launchagent.sh"),
+            (REPO_ROOT / "AGENTS.md", "删掉本轮评价导出临时文件"),
             (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
@@ -617,8 +671,12 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "HANDOVER.md", "14:00 主跑"),
             (REPO_ROOT / "HANDOVER.md", "补跑"),
+            (REPO_ROOT / "HANDOVER.md", "run_review_status_sync.py"),
+            (REPO_ROOT / "HANDOVER.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "install_review_status_launchagent.sh"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "固定节奏连续查询"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "先在飞书或别的外部表里把目标订单缩小到最少"),

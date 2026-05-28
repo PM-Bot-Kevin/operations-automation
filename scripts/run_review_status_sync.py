@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import subprocess
+import sys
+import time
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
+RUNTIME_DIR = REPO_ROOT / "runtime" / "review_status_sync"
+PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
+LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
+
+
+class ReviewStatusRunError(RuntimeError):
+    pass
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="飞书好评表已上评同步正式驱动脚本")
+    parser.add_argument("--mode", choices=("main", "retry"), default="main")
+    return parser.parse_args()
+
+
+def irregular_pause(min_seconds: float, max_seconds: float) -> None:
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def run_json_command(args: list[str]) -> dict[str, Any]:
+    completed = subprocess.run(
+        args,
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip() or "命令执行失败"
+        raise ReviewStatusRunError(message)
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ReviewStatusRunError(f"无法解析脚本输出：{completed.stdout[:400]}") from exc
+
+
+def sanitize_store_name(value: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
+    return safe.strip("_") or "store"
+
+
+def notify(title: str, message: str) -> None:
+    escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_message = message.replace("\\", "\\\\").replace('"', '\\"')
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'display notification "{escaped_message}" with title "{escaped_title}"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def save_status(status: dict[str, Any]) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    dated_file = RUNTIME_DIR / f"status_{status['today']}.json"
+    payload = json.dumps(status, ensure_ascii=False, indent=2) + "\n"
+    dated_file.write_text(payload, encoding="utf-8")
+    LATEST_STATUS_FILE.write_text(payload, encoding="utf-8")
+
+
+def cleanup_export_files(export_payload: dict[str, Any] | None) -> None:
+    if not export_payload:
+        return
+    for key in ("saved_file", "source_file"):
+        raw_path = export_payload.get(key)
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            continue
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            continue
+
+
+def summarize_issues(issues: list[dict[str, Any]]) -> str:
+    if not issues:
+        return "无异常"
+    parts: list[str] = []
+    for issue in issues:
+        store_name = issue["store_name"]
+        if issue["type"] == "missing_orders":
+            parts.append(f"{store_name} 漏 {issue['missing_count']} 单")
+        else:
+            parts.append(f"{store_name} 失败")
+    return "；".join(parts[:4])
+
+
+def main() -> int:
+    args = parse_args()
+    today = date.today().isoformat()
+    started_at = datetime.now().isoformat(timespec="seconds")
+
+    try:
+        plan = run_json_command(
+            [
+                "python3",
+                str(SYNC_SCRIPT),
+                "plan",
+                "--format",
+                "json",
+                "--output",
+                str(PLAN_FILE),
+            ]
+        )
+    except ReviewStatusRunError as exc:
+        status = {
+            "today": today,
+            "mode": args.mode,
+            "started_at": started_at,
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "failed",
+            "summary": {"pending_orders": 0, "stores_involved": 0},
+            "issues": [{"type": "plan_failed", "store_name": "整体", "message": str(exc)}],
+            "results": [],
+        }
+        save_status(status)
+        notify("已上评同步失败", f"{args.mode} 阶段连计划都没拉出来：{exc}")
+        return 1
+
+    pending_orders = int(plan["summary"]["pending_orders"])
+    stores = plan.get("stores", [])
+    if pending_orders == 0 or not stores:
+        status = {
+            "today": today,
+            "mode": args.mode,
+            "started_at": started_at,
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "success",
+            "summary": plan["summary"],
+            "issues": [],
+            "results": [],
+        }
+        save_status(status)
+        return 0
+
+    results: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+
+    for index, store in enumerate(stores):
+        store_name = store["store_name"]
+        if index > 0:
+            irregular_pause(35, 90)
+
+        export_payload: dict[str, Any] | None = None
+        try:
+            export_payload = run_json_command(
+                [
+                    "python3",
+                    str(SYNC_SCRIPT),
+                    "export-store",
+                    "--plan-file",
+                    str(PLAN_FILE),
+                    "--store",
+                    store_name,
+                    "--format",
+                    "json",
+                ]
+            )
+            irregular_pause(2, 5)
+            reconcile_payload = run_json_command(
+                [
+                    "python3",
+                    str(SYNC_SCRIPT),
+                    "reconcile",
+                    "--plan-file",
+                    str(PLAN_FILE),
+                    "--store",
+                    store_name,
+                    "--export-file",
+                    export_payload["saved_file"],
+                    "--apply",
+                    "--format",
+                    "json",
+                ]
+            )
+            results.append(
+                {
+                    "store_name": store_name,
+                    "export": export_payload,
+                    "reconcile": reconcile_payload,
+                }
+            )
+            if reconcile_payload["missing_count"] > 0:
+                issues.append(
+                    {
+                        "type": "missing_orders",
+                        "store_name": store_name,
+                        "missing_count": reconcile_payload["missing_count"],
+                        "missing_orders": reconcile_payload["missing_orders"],
+                    }
+                )
+        except ReviewStatusRunError as exc:
+            issues.append(
+                {
+                    "type": "store_failed",
+                    "store_name": store_name,
+                    "message": str(exc),
+                }
+            )
+        finally:
+            cleanup_export_files(export_payload)
+
+    status = {
+        "today": today,
+        "mode": args.mode,
+        "started_at": started_at,
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "status": "success" if not issues else "failed",
+        "summary": plan["summary"],
+        "issues": issues,
+        "results": results,
+    }
+    save_status(status)
+
+    if issues:
+        if args.mode == "main":
+            notify(
+                "已上评同步主跑有异常",
+                f"{summarize_issues(issues)}。14:40 会自动补跑。",
+            )
+        else:
+            notify(
+                "已上评同步补跑后仍异常",
+                summarize_issues(issues),
+            )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

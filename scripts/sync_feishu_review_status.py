@@ -5,9 +5,11 @@ import argparse
 import csv
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -19,7 +21,17 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from xhs_qianfan_access import DEFAULT_LOCAL_STATE_PATH, ChromeProfile, load_profiles, resolve_profile
+from xhs_qianfan_access import (
+    DEFAULT_LOCAL_STATE_PATH,
+    ChromeProfile,
+    ChromeUiElement,
+    PAGE_URLS,
+    element_center,
+    load_profiles,
+    open_page,
+    resolve_profile,
+    wait_for_front_window,
+)
 
 
 DEFAULT_BASE_TOKEN = "W0XvbodVPaE854sF42IcnHkIn1d"
@@ -37,6 +49,7 @@ KNOWN_LARK_CLI_PATHS = [
     Path.home() / ".codex/skills/fill-product-db/node_modules/@larksuite/cli/bin/lark-cli",
 ]
 ORDER_COLUMN_CANDIDATES = ("订单id", "订单ID", "订单号")
+DATE_TEXTFIELD_COMMIT_KEY = "tab"
 
 
 class ReviewSyncError(RuntimeError):
@@ -100,6 +113,17 @@ def parse_args() -> argparse.Namespace:
     reconcile_parser.add_argument("--format", choices=("text", "json"), default="text")
     reconcile_parser.add_argument("--output", default="")
     reconcile_parser.add_argument("--lark-cli-bin", default=os.environ.get("LARK_CLI_BIN", ""))
+
+    export_parser = subparsers.add_parser("export-store", help="打开指定店铺评价管理页，按计划日期范围搜索并导出评价 CSV")
+    export_parser.add_argument("--plan-file", required=True)
+    export_parser.add_argument("--store", required=True)
+    export_parser.add_argument("--desktop-dir", default=str(DEFAULT_DESKTOP_DIR))
+    export_parser.add_argument("--downloads-dir", default=str(DEFAULT_DOWNLOADS_DIR))
+    export_parser.add_argument("--output-dir", default=str(DEFAULT_EXPORT_DIR))
+    export_parser.add_argument("--local-state-path", default=str(DEFAULT_LOCAL_STATE_PATH))
+    export_parser.add_argument("--export-timeout-seconds", type=int, default=180)
+    export_parser.add_argument("--format", choices=("text", "json"), default="text")
+    export_parser.add_argument("--output", default="")
     return parser.parse_args()
 
 
@@ -419,6 +443,8 @@ def capture_export(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
     after_time = parse_after_timestamp(args.after)
     source = find_export_file(desktop_dir, downloads_dir, after_time)
+    if not file_is_stable(source):
+        raise ReviewSyncError(f"导出文件还没写完：{source.name}")
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.fromtimestamp(source.stat().st_mtime).strftime("%Y%m%d-%H%M%S")
     target = output_dir / f"{stamp}_{sanitize_store_name(args.store)}.csv"
@@ -428,6 +454,206 @@ def capture_export(args: argparse.Namespace) -> dict[str, Any]:
         "source_file": str(source),
         "saved_file": str(target),
         "saved_at": stamp,
+    }
+
+
+def log_step(message: str) -> None:
+    print(f"[review-sync] {message}", file=sys.stderr, flush=True)
+
+
+def irregular_pause(min_seconds: float, max_seconds: float) -> None:
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
+def build_store_export_window(plan: dict[str, Any], store_name: str) -> tuple[dict[str, Any], str, str]:
+    store = pick_store(plan, store_name)
+    start_date = store["earliest_review_date"]
+    end_date = plan.get("today") or date.today().isoformat()
+    return store, start_date, end_date
+
+
+def locate_comment_page_controls(snapshot: dict[str, Any]) -> dict[str, ChromeUiElement]:
+    elements: list[ChromeUiElement] = snapshot["elements"]
+    date_label_index = -1
+    date_fields: list[ChromeUiElement] = []
+    search_button: ChromeUiElement | None = None
+    export_button: ChromeUiElement | None = None
+
+    for element in elements:
+        if element.role == "AXStaticText" and element.value == "评价时间":
+            date_label_index = element.index
+            continue
+        if date_label_index >= 0 and element.index > date_label_index and element.role == "AXTextField":
+            date_fields.append(element)
+            if len(date_fields) == 2:
+                continue
+        if search_button is None and element.role == "AXButton" and element.title == "搜索":
+            search_button = element
+        if export_button is None and element.role == "AXButton" and element.title == "全部导出":
+            export_button = element
+
+    if len(date_fields) < 2:
+        raise ReviewSyncError("没有定位到评价时间的开始/结束日期输入框。")
+    if search_button is None:
+        raise ReviewSyncError("没有定位到“搜索”按钮。")
+    if export_button is None:
+        raise ReviewSyncError("没有定位到“全部导出”按钮。")
+    return {
+        "start_date_field": date_fields[0],
+        "end_date_field": date_fields[1],
+        "search_button": search_button,
+        "export_button": export_button,
+    }
+
+
+def _load_pyautogui() -> Any:
+    try:
+        import pyautogui  # type: ignore
+    except Exception as exc:
+        raise ReviewSyncError(f"当前环境缺少 pyautogui，无法执行本机低频 Chrome 操作：{exc}") from exc
+    pyautogui.PAUSE = 0
+    pyautogui.FAILSAFE = True
+    return pyautogui
+
+
+def move_and_click(pyautogui: Any, point: tuple[int, int]) -> None:
+    x, y = point
+    jitter_x = random.randint(-2, 2)
+    jitter_y = random.randint(-2, 2)
+    pyautogui.moveTo(x + jitter_x, y + jitter_y, duration=random.uniform(0.18, 0.55))
+    irregular_pause(0.15, 0.45)
+    pyautogui.click()
+
+
+def type_text_humanized(pyautogui: Any, text: str) -> None:
+    for char in text:
+        pyautogui.write(char)
+        time.sleep(random.uniform(0.04, 0.14))
+
+
+def replace_text(pyautogui: Any, point: tuple[int, int], text: str) -> None:
+    move_and_click(pyautogui, point)
+    irregular_pause(0.25, 0.55)
+    pyautogui.hotkey("command", "a")
+    irregular_pause(0.12, 0.25)
+    pyautogui.press("backspace")
+    irregular_pause(0.12, 0.28)
+    type_text_humanized(pyautogui, text)
+    irregular_pause(0.18, 0.35)
+    pyautogui.press(DATE_TEXTFIELD_COMMIT_KEY)
+
+
+def file_is_stable(path: Path, *, stable_seconds: float = 2.5) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    first = path.stat()
+    if first.st_size <= 0:
+        return False
+    time.sleep(stable_seconds)
+    second = path.stat()
+    return second.st_size > 0 and first.st_size == second.st_size and int(first.st_mtime) == int(second.st_mtime)
+
+
+def wait_for_export_capture(
+    *,
+    store_name: str,
+    after_time: datetime,
+    desktop_dir: Path,
+    downloads_dir: Path,
+    output_dir: Path,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    deadline = time.time() + max(timeout_seconds, 10)
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            source = find_export_file(desktop_dir, downloads_dir, after_time)
+            if not file_is_stable(source):
+                raise ReviewSyncError(f"导出文件还没写完：{source.name}")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.fromtimestamp(source.stat().st_mtime).strftime("%Y%m%d-%H%M%S")
+            target = output_dir / f"{stamp}_{sanitize_store_name(store_name)}.csv"
+            shutil.copy2(source, target)
+            return {
+                "store_name": store_name,
+                "source_file": str(source),
+                "saved_file": str(target),
+                "saved_at": stamp,
+            }
+        except Exception as exc:
+            last_error = exc
+            time.sleep(2)
+    raise ReviewSyncError(f"等待评价导出文件超时（{timeout_seconds} 秒）") from last_error
+
+
+def export_store(args: argparse.Namespace) -> dict[str, Any]:
+    plan = load_plan(Path(args.plan_file).expanduser().resolve())
+    store, start_date, end_date = build_store_export_window(plan, args.store)
+    local_state_path = Path(args.local_state_path).expanduser().resolve()
+    desktop_dir = Path(args.desktop_dir).expanduser().resolve()
+    downloads_dir = Path(args.downloads_dir).expanduser().resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    profiles = load_profiles(local_state_path)
+    profile = resolve_profile(profiles, store["store_name"])
+    after_time = datetime.now()
+    pyautogui = _load_pyautogui()
+
+    log_step(f"打开店铺评价页：{store['store_name']} ({profile.directory})")
+    open_page(profile, "comments", dry_run=False)
+    irregular_pause(3.0, 6.0)
+    snapshot = wait_for_front_window(
+        title_contains=store["store_name"],
+        url_contains=PAGE_URLS["comments"],
+        required_texts=("评价时间", "搜索", "全部导出"),
+        timeout_seconds=35,
+    )
+    controls = locate_comment_page_controls(snapshot)
+    log_step("定位评价页成功，开始低频填写日期")
+
+    replace_text(pyautogui, element_center(controls["start_date_field"]), start_date)
+    irregular_pause(0.8, 1.8)
+    replace_text(pyautogui, element_center(controls["end_date_field"]), end_date)
+    irregular_pause(1.0, 2.0)
+    log_step(f"已写入日期范围：{start_date} ~ {end_date}")
+
+    move_and_click(pyautogui, element_center(controls["search_button"]))
+    log_step("已点击搜索，等待页面整理结果")
+    irregular_pause(4.0, 8.0)
+
+    snapshot = wait_for_front_window(
+        title_contains=store["store_name"],
+        url_contains=PAGE_URLS["comments"],
+        required_texts=("全部导出",),
+        timeout_seconds=25,
+    )
+    controls = locate_comment_page_controls(snapshot)
+    move_and_click(pyautogui, element_center(controls["export_button"]))
+    log_step("已点击全部导出，等待桌面文件稳定落地")
+    irregular_pause(2.5, 4.5)
+
+    log_step("开始接住桌面导出文件")
+    capture = wait_for_export_capture(
+        store_name=store["store_name"],
+        after_time=after_time,
+        desktop_dir=desktop_dir,
+        downloads_dir=downloads_dir,
+        output_dir=output_dir,
+        timeout_seconds=args.export_timeout_seconds,
+    )
+    log_step(f"已保存导出文件：{capture['saved_file']}")
+    irregular_pause(0.8, 1.5)
+    pyautogui.press("esc")
+    irregular_pause(0.6, 1.2)
+    pyautogui.hotkey("command", "w")
+    return {
+        "store_name": store["store_name"],
+        "profile_name": profile.name or profile.directory,
+        "profile_directory": profile.directory,
+        "start_date": start_date,
+        "end_date": end_date,
+        "source_file": capture["source_file"],
+        "saved_file": capture["saved_file"],
+        "saved_at": capture["saved_at"],
     }
 
 
@@ -564,6 +790,17 @@ def render_reconcile_text(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_export_text(payload: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            f"已为 {payload['store_name']} 导出评价 CSV",
+            f"日期范围：{payload['start_date']} ~ {payload['end_date']}",
+            f"来源文件：{payload['source_file']}",
+            f"保存为：{payload['saved_file']}",
+        ]
+    )
+
+
 def maybe_write_output(path_text: str, payload: dict[str, Any]) -> Path | None:
     if not path_text:
         return None
@@ -593,6 +830,17 @@ def main() -> int:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
             else:
                 print(render_capture_text(payload))
+            return 0
+
+        if args.command == "export-store":
+            payload = export_store(args)
+            output_path = maybe_write_output(args.output, payload)
+            if args.format == "json":
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print(render_export_text(payload))
+                if output_path:
+                    print(f"结果文件：{output_path}")
             return 0
 
         payload = reconcile_export(args)

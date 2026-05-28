@@ -55,6 +55,22 @@
     {
       "label": "好评已上评同步脚本",
       "path": "scripts/sync_feishu_review_status.py"
+    },
+    {
+      "label": "好评已上评同步正式驱动脚本",
+      "path": "scripts/run_review_status_sync.py"
+    },
+    {
+      "label": "好评已上评同步主跑脚本",
+      "path": "scripts/review_status_sync_auto.sh"
+    },
+    {
+      "label": "好评已上评同步补跑脚本",
+      "path": "scripts/check_review_status_sync.sh"
+    },
+    {
+      "label": "好评已上评同步安装脚本",
+      "path": "scripts/install_review_status_launchagent.sh"
     }
   ],
   "release_layout": {

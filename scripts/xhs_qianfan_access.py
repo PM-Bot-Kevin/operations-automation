@@ -2,22 +2,90 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import re
 import subprocess
 import sys
+import time
+from collections import deque
+from ctypes import byref, c_char_p, c_double, c_int32, c_uint32, c_void_p
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Any
 
 
 DEFAULT_LOCAL_STATE_PATH = Path.home() / "Library/Application Support/Google/Chrome/Local State"
 CHROME_APP_NAME = "Google Chrome"
+CHROME_BINARY_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PAGE_URLS = {
     "orders": "https://ark.xiaohongshu.com/app-order/order/query",
     "aftersale": "https://ark.xiaohongshu.com/app-order/aftersale/list",
     "comments": "https://ark.xiaohongshu.com/app-item/comment/analysis",
 }
+CORE_FOUNDATION_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+APPLICATION_SERVICES_PATH = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+CF_STRING_ENCODING_UTF8 = 0x08000100
+AX_POSITION_VALUE_TYPE = 1
+AX_SIZE_VALUE_TYPE = 2
+AX_CHILDREN_LIMIT = 80
+AX_MAX_DEPTH = 26
+AX_MAX_NODES = 1800
+AX_INTERESTING_ROLES = {
+    "AXButton",
+    "AXGroup",
+    "AXHeading",
+    "AXLink",
+    "AXPopUpButton",
+    "AXRadioButton",
+    "AXStaticText",
+    "AXTextField",
+    "AXWebArea",
+}
+AX_SKIP_SUBTREE_ROLES = {"AXImage"}
+
+CFTypeRef = c_void_p
+CFStringRef = c_void_p
+AXUIElementRef = c_void_p
+
+_CORE_FOUNDATION = ctypes.cdll.LoadLibrary(CORE_FOUNDATION_PATH)
+_APPLICATION_SERVICES = ctypes.cdll.LoadLibrary(APPLICATION_SERVICES_PATH)
+
+_CORE_FOUNDATION.CFStringCreateWithCString.restype = CFStringRef
+_CORE_FOUNDATION.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, c_uint32]
+_CORE_FOUNDATION.CFGetTypeID.argtypes = [CFTypeRef]
+_CORE_FOUNDATION.CFGetTypeID.restype = c_uint32
+_CORE_FOUNDATION.CFStringGetTypeID.restype = c_uint32
+_CORE_FOUNDATION.CFArrayGetCount.argtypes = [CFTypeRef]
+_CORE_FOUNDATION.CFArrayGetCount.restype = c_int32
+_CORE_FOUNDATION.CFArrayGetValueAtIndex.argtypes = [CFTypeRef, c_int32]
+_CORE_FOUNDATION.CFArrayGetValueAtIndex.restype = c_void_p
+_CORE_FOUNDATION.CFStringGetLength.argtypes = [CFStringRef]
+_CORE_FOUNDATION.CFStringGetLength.restype = c_int32
+_CORE_FOUNDATION.CFStringGetMaximumSizeForEncoding.argtypes = [c_int32, c_uint32]
+_CORE_FOUNDATION.CFStringGetMaximumSizeForEncoding.restype = c_int32
+_CORE_FOUNDATION.CFStringGetCString.argtypes = [CFStringRef, c_char_p, c_int32, c_uint32]
+_CORE_FOUNDATION.CFStringGetCString.restype = ctypes.c_bool
+
+_APPLICATION_SERVICES.AXUIElementCreateApplication.argtypes = [c_int32]
+_APPLICATION_SERVICES.AXUIElementCreateApplication.restype = AXUIElementRef
+_APPLICATION_SERVICES.AXUIElementCopyAttributeValue.argtypes = [AXUIElementRef, CFStringRef, ctypes.POINTER(CFTypeRef)]
+_APPLICATION_SERVICES.AXUIElementCopyAttributeValue.restype = c_int32
+_APPLICATION_SERVICES.AXUIElementPerformAction.argtypes = [AXUIElementRef, CFStringRef]
+_APPLICATION_SERVICES.AXUIElementPerformAction.restype = c_int32
+_APPLICATION_SERVICES.AXValueGetType.argtypes = [CFTypeRef]
+_APPLICATION_SERVICES.AXValueGetType.restype = c_uint32
+_APPLICATION_SERVICES.AXValueGetValue.argtypes = [CFTypeRef, c_uint32, c_void_p]
+_APPLICATION_SERVICES.AXValueGetValue.restype = ctypes.c_bool
+
+
+class CGPoint(ctypes.Structure):
+    _fields_ = [("x", c_double), ("y", c_double)]
+
+
+class CGSize(ctypes.Structure):
+    _fields_ = [("width", c_double), ("height", c_double)]
 
 
 class QianfanAccessError(RuntimeError):
@@ -30,6 +98,17 @@ class ChromeProfile:
     name: str
     user_name: str
     is_last_used: bool
+
+
+@dataclass(frozen=True)
+class ChromeUiElement:
+    index: int
+    role: str
+    title: str
+    description: str
+    value: str
+    position: tuple[int, int] | None
+    size: tuple[int, int] | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -124,18 +203,246 @@ def resolve_profile(profiles: list[ChromeProfile], store_query: str) -> ChromePr
 def open_page(profile: ChromeProfile, page: str, dry_run: bool) -> str:
     target_url = PAGE_URLS[page]
     command = [
-        "open",
-        "-na",
-        CHROME_APP_NAME,
-        "--args",
+        CHROME_BINARY_PATH,
         f"--profile-directory={profile.directory}",
+        "--new-window",
         target_url,
     ]
     if dry_run:
         return " ".join(command)
 
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return target_url
+
+
+def _cf_string(text: str) -> CFStringRef:
+    return _CORE_FOUNDATION.CFStringCreateWithCString(None, text.encode("utf-8"), CF_STRING_ENCODING_UTF8)
+
+
+def _cf_string_to_text(value: CFTypeRef | None) -> str:
+    if not value:
+        return ""
+    if _CORE_FOUNDATION.CFGetTypeID(value) != _CORE_FOUNDATION.CFStringGetTypeID():
+        return ""
+    length = _CORE_FOUNDATION.CFStringGetLength(value)
+    size = _CORE_FOUNDATION.CFStringGetMaximumSizeForEncoding(length, CF_STRING_ENCODING_UTF8) + 1
+    buffer = ctypes.create_string_buffer(size)
+    if not _CORE_FOUNDATION.CFStringGetCString(value, buffer, size, CF_STRING_ENCODING_UTF8):
+        return ""
+    return buffer.value.decode("utf-8", errors="ignore")
+
+
+def _copy_attribute(element: AXUIElementRef, attribute_name: str) -> CFTypeRef | None:
+    attribute = _cf_string(attribute_name)
+    output = CFTypeRef()
+    error_code = _APPLICATION_SERVICES.AXUIElementCopyAttributeValue(element, attribute, byref(output))
+    if error_code != 0 or not output:
+        return None
+    return output
+
+
+def _copy_children(element: AXUIElementRef) -> list[AXUIElementRef]:
+    raw_children = _copy_attribute(element, "AXChildren")
+    if not raw_children:
+        return []
+    child_count = _CORE_FOUNDATION.CFArrayGetCount(raw_children)
+    return [
+        c_void_p(_CORE_FOUNDATION.CFArrayGetValueAtIndex(raw_children, index))
+        for index in range(min(child_count, AX_CHILDREN_LIMIT))
+    ]
+
+
+def _copy_text_attribute(element: AXUIElementRef, attribute_name: str) -> str:
+    return _cf_string_to_text(_copy_attribute(element, attribute_name))
+
+
+def _copy_point_like_attribute(element: AXUIElementRef, attribute_name: str) -> tuple[int, int] | None:
+    raw_value = _copy_attribute(element, attribute_name)
+    if not raw_value:
+        return None
+
+    value_type = _APPLICATION_SERVICES.AXValueGetType(raw_value)
+    if attribute_name == "AXPosition" and value_type == AX_POSITION_VALUE_TYPE:
+        point = CGPoint()
+        if _APPLICATION_SERVICES.AXValueGetValue(raw_value, value_type, byref(point)):
+            return round(point.x), round(point.y)
+    if attribute_name == "AXSize" and value_type == AX_SIZE_VALUE_TYPE:
+        size = CGSize()
+        if _APPLICATION_SERVICES.AXValueGetValue(raw_value, value_type, byref(size)):
+            return round(size.width), round(size.height)
+    return None
+
+
+def _find_chrome_pid(app_name: str) -> int:
+    completed = subprocess.run(
+        ["pgrep", "-x", app_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise QianfanAccessError(f"找不到应用：{app_name}")
+    for raw_line in completed.stdout.splitlines():
+        candidate = raw_line.strip()
+        if candidate.isdigit():
+            return int(candidate)
+    raise QianfanAccessError(f"找不到应用进程号：{app_name}")
+
+
+def _front_window_reference(app_name: str) -> AXUIElementRef:
+    app_ref = _APPLICATION_SERVICES.AXUIElementCreateApplication(_find_chrome_pid(app_name))
+    if not app_ref:
+        raise QianfanAccessError(f"无法连接应用：{app_name}")
+
+    focused_window = _copy_attribute(app_ref, "AXFocusedWindow")
+    if focused_window:
+        return focused_window
+
+    raw_windows = _copy_attribute(app_ref, "AXWindows")
+    if raw_windows and _CORE_FOUNDATION.CFArrayGetCount(raw_windows) > 0:
+        return c_void_p(_CORE_FOUNDATION.CFArrayGetValueAtIndex(raw_windows, 0))
+    raise QianfanAccessError(f"应用没有可见窗口：{app_name}")
+
+
+def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement]:
+    queue: deque[tuple[AXUIElementRef, int]] = deque([(window_ref, 0)])
+    seen: set[int] = set()
+    elements: list[ChromeUiElement] = []
+
+    while queue and len(seen) < AX_MAX_NODES:
+        element_ref, depth = queue.popleft()
+        pointer = int(element_ref.value or 0)
+        if not pointer or pointer in seen:
+            continue
+        seen.add(pointer)
+
+        role = _copy_text_attribute(element_ref, "AXRole")
+        title = _copy_text_attribute(element_ref, "AXTitle")
+        description = _copy_text_attribute(element_ref, "AXDescription")
+        value = _copy_text_attribute(element_ref, "AXValue")
+        position = _copy_point_like_attribute(element_ref, "AXPosition")
+        size = _copy_point_like_attribute(element_ref, "AXSize")
+
+        if role in AX_INTERESTING_ROLES:
+            elements.append(
+                ChromeUiElement(
+                    index=len(elements),
+                    role=role,
+                    title=title[:120],
+                    description=description[:120],
+                    value=value[:120],
+                    position=position,
+                    size=size,
+                )
+            )
+
+        if depth >= AX_MAX_DEPTH or role in AX_SKIP_SUBTREE_ROLES:
+            continue
+
+        for child_ref in _copy_children(element_ref):
+            queue.append((child_ref, depth + 1))
+    return elements
+
+
+def capture_front_window_ui(app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
+    window_ref = _front_window_reference(app_name)
+    window_title = _copy_text_attribute(window_ref, "AXTitle")
+    elements = _collect_window_elements(window_ref)
+    return {
+        "app_name": app_name,
+        "window_title": window_title,
+        "elements": elements,
+    }
+
+
+def wait_for_front_window(
+    *,
+    title_contains: str,
+    url_contains: str,
+    required_texts: tuple[str, ...] = (),
+    timeout_seconds: int = 30,
+    poll_seconds: float = 1.5,
+) -> dict[str, Any]:
+    deadline = time.time() + max(timeout_seconds, 5)
+    last_error: Exception | None = None
+    normalized_expected_url = url_contains.replace("https://", "").replace("http://", "")
+    while time.time() < deadline:
+        try:
+            snapshot = capture_front_window_ui()
+            window_title = snapshot["window_title"]
+            if title_contains and title_contains not in window_title:
+                raise QianfanAccessError(f"当前前台窗口不是目标店铺：{window_title}")
+
+            elements: list[ChromeUiElement] = snapshot["elements"]
+            address_bars = [
+                element
+                for element in elements
+                if element.role == "AXTextField" and element.description == "地址和搜索栏"
+            ]
+            current_url = address_bars[0].value if address_bars else ""
+            normalized_current_url = current_url.replace("https://", "").replace("http://", "")
+            if normalized_expected_url and normalized_expected_url not in normalized_current_url:
+                raise QianfanAccessError(f"当前前台窗口不是目标页面：{current_url}")
+
+            text_pool = "\n".join(
+                part
+                for element in elements
+                for part in (element.title, element.description, element.value)
+                if part
+            )
+            missing = [text for text in required_texts if text not in text_pool]
+            if missing:
+                raise QianfanAccessError(f"页面关键控件还没出现：{', '.join(missing)}")
+            return snapshot
+        except Exception as exc:
+            last_error = exc
+            time.sleep(poll_seconds)
+    raise QianfanAccessError("等待目标 Chrome 页面就绪超时。") from last_error
+
+
+def element_center(element: ChromeUiElement) -> tuple[int, int]:
+    if element.position is None:
+        raise QianfanAccessError(f"元素缺少位置：{element.role} {element.title}")
+    x, y = element.position
+    if element.size is None:
+        return x, y
+    width, height = element.size
+    return x + max(width // 2, 1), y + max(height // 2, 1)
+
+
+def press_front_window_element(element_index: int, app_name: str = CHROME_APP_NAME) -> None:
+    window_ref = _front_window_reference(app_name)
+    queue: deque[tuple[AXUIElementRef, int]] = deque([(window_ref, 0)])
+    seen: set[int] = set()
+    current_index = 0
+
+    while queue and len(seen) < AX_MAX_NODES:
+        element_ref, depth = queue.popleft()
+        pointer = int(element_ref.value or 0)
+        if not pointer or pointer in seen:
+            continue
+        seen.add(pointer)
+
+        role = _copy_text_attribute(element_ref, "AXRole")
+        if role in AX_INTERESTING_ROLES:
+            if current_index == element_index:
+                action = _cf_string("AXPress")
+                error_code = _APPLICATION_SERVICES.AXUIElementPerformAction(element_ref, action)
+                if error_code != 0:
+                    raise QianfanAccessError(f"点击元素失败，错误码：{error_code}")
+                return
+            current_index += 1
+
+        if depth >= AX_MAX_DEPTH or role in AX_SKIP_SUBTREE_ROLES:
+            continue
+        for child_ref in _copy_children(element_ref):
+            queue.append((child_ref, depth + 1))
+
+    raise QianfanAccessError(f"元素索引越界：{element_index}")
 
 
 def format_profile(profile: ChromeProfile) -> str:
