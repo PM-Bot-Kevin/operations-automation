@@ -519,6 +519,22 @@ print(json.dumps(payload, ensure_ascii=False))
             export_file.write_text("", encoding="utf-8")
             self.assertFalse(module.file_is_stable(export_file, stable_seconds=0.05))
 
+    def test_review_status_launch_scripts_pin_python_path(self) -> None:
+        main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")
+        check_script = (REPO_ROOT / "scripts" / "check_review_status_sync.sh").read_text(encoding="utf-8")
+        install_script = (REPO_ROOT / "scripts" / "install_review_status_launchagent.sh").read_text(encoding="utf-8")
+        for content in (main_script, check_script):
+            self.assertIn("/Library/Frameworks/Python.framework/Versions/3.11/bin/python3", content)
+            self.assertIn("REVIEW_STATUS_PYTHON_BIN", content)
+            self.assertIn('exec "$PYTHON_BIN"', content)
+
+        run_script = (REPO_ROOT / "scripts" / "run_review_status_sync.py").read_text(encoding="utf-8")
+        self.assertIn('PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"', run_script)
+        self.assertNotIn('[\n                "python3",', run_script)
+        self.assertIn("<key>EnvironmentVariables</key>", install_script)
+        self.assertIn("<key>REVIEW_STATUS_PYTHON_BIN</key>", install_script)
+        self.assertIn("<key>PATH</key>", install_script)
+
     def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
             root = Path(temp_dir)

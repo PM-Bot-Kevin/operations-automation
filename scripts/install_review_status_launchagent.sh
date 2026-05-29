@@ -12,6 +12,8 @@ CHECK_PLIST="${PLIST_DIR}/${CHECK_LABEL}.plist"
 LOG_DIR="${REPO_ROOT}/runtime/review_status_sync_logs"
 MAIN_LOG="${LOG_DIR}/main.log"
 CHECK_LOG="${LOG_DIR}/check.log"
+PREFERRED_PYTHON="${REVIEW_STATUS_PREFERRED_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.11/bin/python3}"
+LAUNCH_PATH="${REVIEW_STATUS_LAUNCH_PATH:-/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 mkdir -p "$PLIST_DIR" "$LOG_DIR"
 
@@ -29,6 +31,13 @@ cat > "$MAIN_PLIST" <<EOF
   </array>
   <key>WorkingDirectory</key>
   <string>${REPO_ROOT}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${LAUNCH_PATH}</string>
+    <key>REVIEW_STATUS_PYTHON_BIN</key>
+    <string>${PREFERRED_PYTHON}</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
@@ -58,6 +67,13 @@ cat > "$CHECK_PLIST" <<EOF
   </array>
   <key>WorkingDirectory</key>
   <string>${REPO_ROOT}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${LAUNCH_PATH}</string>
+    <key>REVIEW_STATUS_PYTHON_BIN</key>
+    <string>${PREFERRED_PYTHON}</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
@@ -83,4 +99,5 @@ cat <<EOF
 - main: $MAIN_PLIST
 - check: $CHECK_PLIST
 - log dir: $LOG_DIR
+- python: $PREFERRED_PYTHON
 EOF

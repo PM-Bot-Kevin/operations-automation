@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
@@ -17,6 +18,7 @@ SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
 RUNTIME_DIR = REPO_ROOT / "runtime" / "review_status_sync"
 PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
 LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
+PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"
 
 
 class ReviewStatusRunError(RuntimeError):
@@ -116,7 +118,7 @@ def main() -> int:
     try:
         plan = run_json_command(
             [
-                "python3",
+                PYTHON_BIN,
                 str(SYNC_SCRIPT),
                 "plan",
                 "--format",
@@ -168,7 +170,7 @@ def main() -> int:
         try:
             export_payload = run_json_command(
                 [
-                    "python3",
+                    PYTHON_BIN,
                     str(SYNC_SCRIPT),
                     "export-store",
                     "--plan-file",
@@ -182,7 +184,7 @@ def main() -> int:
             irregular_pause(2, 5)
             reconcile_payload = run_json_command(
                 [
-                    "python3",
+                    PYTHON_BIN,
                     str(SYNC_SCRIPT),
                     "reconcile",
                     "--plan-file",

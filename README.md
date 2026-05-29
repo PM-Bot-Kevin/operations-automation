@@ -185,6 +185,7 @@ bash scripts/install_review_status_launchagent.sh
 - 导出文件默认先到桌面找，桌面没有新的，再去 `Downloads` 找
 - 导出文件列名口径固定按 `订单id` 匹配飞书 `订单号`
 - 定时任务默认按 `14:00` 主跑、`14:40` 补跑巡检；正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
+- 本机定时任务固定锁定到带 `pyautogui` 的 Python 3.11，并在安装时把 `PATH` 和 `REVIEW_STATUS_PYTHON_BIN` 一起写进 `launchd` 配置，避免 macOS 默认系统 Python 缺依赖导致静默失败
 - 页面就算被关掉，正式任务也会先复用对应店铺 Chrome 资料重新打开评价管理页，再走搜索和导出
 - 每轮任务用到的评价导出临时文件，任务结束后会自动删除，不在桌面和运行目录长期残留
 - 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
