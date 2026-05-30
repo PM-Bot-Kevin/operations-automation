@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLIST_DIR="${HOME}/Library/LaunchAgents"
+LAUNCH_DOMAIN="gui/$(id -u)"
 LABEL_BASE="${REVIEW_STATUS_LABEL_BASE:-com.luogic.operations-automation.review-status-sync}"
 MAIN_LABEL="${LABEL_BASE}"
 CHECK_LABEL="${LABEL_BASE}-check"
@@ -89,10 +90,10 @@ cat > "$CHECK_PLIST" <<EOF
 </plist>
 EOF
 
-launchctl unload "$MAIN_PLIST" >/dev/null 2>&1 || true
-launchctl unload "$CHECK_PLIST" >/dev/null 2>&1 || true
-launchctl load "$MAIN_PLIST"
-launchctl load "$CHECK_PLIST"
+launchctl bootout "$LAUNCH_DOMAIN" "$MAIN_PLIST" >/dev/null 2>&1 || true
+launchctl bootout "$LAUNCH_DOMAIN" "$CHECK_PLIST" >/dev/null 2>&1 || true
+launchctl bootstrap "$LAUNCH_DOMAIN" "$MAIN_PLIST"
+launchctl bootstrap "$LAUNCH_DOMAIN" "$CHECK_PLIST"
 
 cat <<EOF
 已安装好评已上评同步定时任务

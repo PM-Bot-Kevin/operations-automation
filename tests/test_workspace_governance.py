@@ -527,6 +527,7 @@ print(json.dumps(payload, ensure_ascii=False))
             self.assertIn("/Library/Frameworks/Python.framework/Versions/3.11/bin/python3", content)
             self.assertIn("REVIEW_STATUS_PYTHON_BIN", content)
             self.assertIn('exec "$PYTHON_BIN"', content)
+        self.assertIn("REVIEW_STATUS_SCHEDULED_RETRY=1", check_script)
 
         run_script = (REPO_ROOT / "scripts" / "run_review_status_sync.py").read_text(encoding="utf-8")
         self.assertIn('PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"', run_script)
@@ -534,6 +535,9 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertIn("<key>EnvironmentVariables</key>", install_script)
         self.assertIn("<key>REVIEW_STATUS_PYTHON_BIN</key>", install_script)
         self.assertIn("<key>PATH</key>", install_script)
+        self.assertIn("<integer>20</integer>", install_script)
+        self.assertIn('launchctl bootout "$LAUNCH_DOMAIN" "$CHECK_PLIST"', install_script)
+        self.assertIn('launchctl bootstrap "$LAUNCH_DOMAIN" "$CHECK_PLIST"', install_script)
 
     def test_run_review_status_notification_messages_and_retry_gate(self) -> None:
         script = REPO_ROOT / "scripts" / "run_review_status_sync.py"

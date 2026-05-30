@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     export_parser.add_argument("--downloads-dir", default=str(DEFAULT_DOWNLOADS_DIR))
     export_parser.add_argument("--output-dir", default=str(DEFAULT_EXPORT_DIR))
     export_parser.add_argument("--local-state-path", default=str(DEFAULT_LOCAL_STATE_PATH))
-    export_parser.add_argument("--export-timeout-seconds", type=int, default=180)
+    export_parser.add_argument("--export-timeout-seconds", type=int, default=420)
     export_parser.add_argument("--format", choices=("text", "json"), default="text")
     export_parser.add_argument("--output", default="")
     return parser.parse_args()
@@ -543,6 +543,13 @@ def replace_text(pyautogui: Any, point: tuple[int, int], text: str) -> None:
     pyautogui.press(DATE_TEXTFIELD_COMMIT_KEY)
 
 
+def close_comment_window(pyautogui: Any) -> None:
+    irregular_pause(0.4, 0.9)
+    pyautogui.press("esc")
+    irregular_pause(0.5, 1.0)
+    pyautogui.hotkey("command", "w")
+
+
 def file_is_stable(path: Path, *, stable_seconds: float = 2.5) -> bool:
     if not path.exists() or not path.is_file():
         return False
@@ -598,63 +605,62 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
     after_time = datetime.now()
     pyautogui = _load_pyautogui()
 
-    log_step(f"打开店铺评价页：{store['store_name']} ({profile.directory})")
-    open_page(profile, "comments", dry_run=False)
-    irregular_pause(3.0, 6.0)
-    snapshot = wait_for_front_window(
-        title_contains=store["store_name"],
-        url_contains=PAGE_URLS["comments"],
-        required_texts=("评价时间", "搜索", "全部导出"),
-        timeout_seconds=35,
-    )
-    controls = locate_comment_page_controls(snapshot)
-    log_step("定位评价页成功，开始低频填写日期")
+    try:
+        log_step(f"打开店铺评价页：{store['store_name']} ({profile.directory})")
+        open_page(profile, "comments", dry_run=False)
+        irregular_pause(3.0, 6.0)
+        snapshot = wait_for_front_window(
+            title_contains=store["store_name"],
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("评价时间", "搜索", "全部导出"),
+            timeout_seconds=35,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        log_step("定位评价页成功，开始低频填写日期")
 
-    replace_text(pyautogui, element_center(controls["start_date_field"]), start_date)
-    irregular_pause(0.8, 1.8)
-    replace_text(pyautogui, element_center(controls["end_date_field"]), end_date)
-    irregular_pause(1.0, 2.0)
-    log_step(f"已写入日期范围：{start_date} ~ {end_date}")
+        replace_text(pyautogui, element_center(controls["start_date_field"]), start_date)
+        irregular_pause(0.8, 1.8)
+        replace_text(pyautogui, element_center(controls["end_date_field"]), end_date)
+        irregular_pause(1.0, 2.0)
+        log_step(f"已写入日期范围：{start_date} ~ {end_date}")
 
-    move_and_click(pyautogui, element_center(controls["search_button"]))
-    log_step("已点击搜索，等待页面整理结果")
-    irregular_pause(4.0, 8.0)
+        move_and_click(pyautogui, element_center(controls["search_button"]))
+        log_step("已点击搜索，等待页面整理结果")
+        irregular_pause(4.0, 8.0)
 
-    snapshot = wait_for_front_window(
-        title_contains=store["store_name"],
-        url_contains=PAGE_URLS["comments"],
-        required_texts=("全部导出",),
-        timeout_seconds=25,
-    )
-    controls = locate_comment_page_controls(snapshot)
-    move_and_click(pyautogui, element_center(controls["export_button"]))
-    log_step("已点击全部导出，等待桌面文件稳定落地")
-    irregular_pause(2.5, 4.5)
+        snapshot = wait_for_front_window(
+            title_contains=store["store_name"],
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("全部导出",),
+            timeout_seconds=25,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        move_and_click(pyautogui, element_center(controls["export_button"]))
+        log_step("已点击全部导出，等待桌面文件稳定落地")
+        irregular_pause(2.5, 4.5)
 
-    log_step("开始接住桌面导出文件")
-    capture = wait_for_export_capture(
-        store_name=store["store_name"],
-        after_time=after_time,
-        desktop_dir=desktop_dir,
-        downloads_dir=downloads_dir,
-        output_dir=output_dir,
-        timeout_seconds=args.export_timeout_seconds,
-    )
-    log_step(f"已保存导出文件：{capture['saved_file']}")
-    irregular_pause(0.8, 1.5)
-    pyautogui.press("esc")
-    irregular_pause(0.6, 1.2)
-    pyautogui.hotkey("command", "w")
-    return {
-        "store_name": store["store_name"],
-        "profile_name": profile.name or profile.directory,
-        "profile_directory": profile.directory,
-        "start_date": start_date,
-        "end_date": end_date,
-        "source_file": capture["source_file"],
-        "saved_file": capture["saved_file"],
-        "saved_at": capture["saved_at"],
-    }
+        log_step("开始接住桌面导出文件")
+        capture = wait_for_export_capture(
+            store_name=store["store_name"],
+            after_time=after_time,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            timeout_seconds=args.export_timeout_seconds,
+        )
+        log_step(f"已保存导出文件：{capture['saved_file']}")
+        return {
+            "store_name": store["store_name"],
+            "profile_name": profile.name or profile.directory,
+            "profile_directory": profile.directory,
+            "start_date": start_date,
+            "end_date": end_date,
+            "source_file": capture["source_file"],
+            "saved_file": capture["saved_file"],
+            "saved_at": capture["saved_at"],
+        }
+    finally:
+        close_comment_window(pyautogui)
 
 
 def load_plan(plan_path: Path) -> dict[str, Any]:
