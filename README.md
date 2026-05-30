@@ -184,7 +184,8 @@ bash scripts/install_review_status_launchagent.sh
 - 默认只处理飞书表里的 `已上评` 字段，不在千帆后台做任何写操作
 - 导出文件默认先到桌面找，桌面没有新的，再去 `Downloads` 找
 - 导出文件列名口径固定按 `订单id` 匹配飞书 `订单号`
-- 定时任务默认按 `14:00` 主跑、`14:40` 补跑巡检；正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
+- 定时任务默认按 `14:00` 主跑；只有主跑失败时，`14:20` 才会自动补跑一次。正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
+- 如果主跑只是查到漏上评，会直接通知结果，不再为了漏上评再补跑
 - 本机定时任务固定锁定到带 `pyautogui` 的 Python 3.11，并在安装时把 `PATH` 和 `REVIEW_STATUS_PYTHON_BIN` 一起写进 `launchd` 配置，避免 macOS 默认系统 Python 缺依赖导致静默失败
 - 页面就算被关掉，正式任务也会先复用对应店铺 Chrome 资料重新打开评价管理页，再走搜索和导出
 - 每轮任务用到的评价导出临时文件，任务结束后会自动删除，不在桌面和运行目录长期残留

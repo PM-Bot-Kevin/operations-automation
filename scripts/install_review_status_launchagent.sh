@@ -79,7 +79,7 @@ cat > "$CHECK_PLIST" <<EOF
     <key>Hour</key>
     <integer>14</integer>
     <key>Minute</key>
-    <integer>40</integer>
+    <integer>20</integer>
   </dict>
   <key>StandardOutPath</key>
   <string>${CHECK_LOG}</string>

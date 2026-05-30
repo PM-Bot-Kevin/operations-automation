@@ -19,6 +19,7 @@ RUNTIME_DIR = REPO_ROOT / "runtime" / "review_status_sync"
 PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
 LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
 PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"
+NOTIFY_TITLE = "好评漏上评检查_自动任务"
 
 
 class ReviewStatusRunError(RuntimeError):
@@ -72,6 +73,15 @@ def notify(title: str, message: str) -> None:
     )
 
 
+def load_latest_status() -> dict[str, Any] | None:
+    if not LATEST_STATUS_FILE.exists():
+        return None
+    try:
+        return json.loads(LATEST_STATUS_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
 def save_status(status: dict[str, Any]) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     dated_file = RUNTIME_DIR / f"status_{status['today']}.json"
@@ -97,23 +107,63 @@ def cleanup_export_files(export_payload: dict[str, Any] | None) -> None:
             continue
 
 
-def summarize_issues(issues: list[dict[str, Any]]) -> str:
-    if not issues:
-        return "无异常"
-    parts: list[str] = []
-    for issue in issues:
-        store_name = issue["store_name"]
-        if issue["type"] == "missing_orders":
-            parts.append(f"{store_name} 漏 {issue['missing_count']} 单")
-        else:
-            parts.append(f"{store_name} 失败")
-    return "；".join(parts[:4])
+def retryable_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [issue for issue in issues if issue["type"] != "missing_orders"]
+
+
+def should_run_scheduled_retry(today: str) -> bool:
+    latest_status = load_latest_status()
+    if not latest_status:
+        return False
+    if latest_status.get("today") != today:
+        return False
+    if latest_status.get("mode") != "main":
+        return False
+    issues = latest_status.get("issues", [])
+    if not isinstance(issues, list):
+        return False
+    return bool(retryable_issues(issues))
+
+
+def summarize_missing_issues(issues: list[dict[str, Any]]) -> str:
+    missing = [issue for issue in issues if issue["type"] == "missing_orders"]
+    total_missing = sum(int(issue.get("missing_count", 0)) for issue in missing)
+    store_parts = [f"{issue['store_name']}{issue['missing_count']}条" for issue in missing]
+    if not store_parts:
+        return ""
+    return f"漏上评{total_missing}条。{'；'.join(store_parts[:4])}。"
+
+
+def summarize_failed_issues(issues: list[dict[str, Any]]) -> str:
+    failed = retryable_issues(issues)
+    if not failed:
+        return ""
+    if any(issue["type"] == "plan_failed" for issue in failed):
+        return "检查失败。今天这轮没跑出来。"
+    store_parts = [f"{issue['store_name']}失败" for issue in failed]
+    return f"检查失败。{'；'.join(store_parts[:4])}。"
+
+
+def build_notification_message(mode: str, issues: list[dict[str, Any]]) -> str:
+    failed = retryable_issues(issues)
+    missing = [issue for issue in issues if issue["type"] == "missing_orders"]
+    if failed:
+        if mode == "retry":
+            return summarize_failed_issues(failed).replace("检查失败。", "补查失败。", 1)
+        return summarize_failed_issues(failed)
+    if missing:
+        return summarize_missing_issues(missing)
+    return ""
 
 
 def main() -> int:
     args = parse_args()
     today = date.today().isoformat()
     started_at = datetime.now().isoformat(timespec="seconds")
+
+    if args.mode == "retry" and os.environ.get("REVIEW_STATUS_SCHEDULED_RETRY") == "1":
+        if not should_run_scheduled_retry(today):
+            return 0
 
     try:
         plan = run_json_command(
@@ -139,7 +189,7 @@ def main() -> int:
             "results": [],
         }
         save_status(status)
-        notify("已上评同步失败", f"{args.mode} 阶段连计划都没拉出来：{exc}")
+        notify(NOTIFY_TITLE, "检查失败。今天这轮没跑出来。")
         return 1
 
     pending_orders = int(plan["summary"]["pending_orders"])
@@ -225,12 +275,13 @@ def main() -> int:
         finally:
             cleanup_export_files(export_payload)
 
+    failed_issues = retryable_issues(issues)
     status = {
         "today": today,
         "mode": args.mode,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "status": "success" if not issues else "failed",
+        "status": "failed" if failed_issues else "success",
         "summary": plan["summary"],
         "issues": issues,
         "results": results,
@@ -238,17 +289,10 @@ def main() -> int:
     save_status(status)
 
     if issues:
-        if args.mode == "main":
-            notify(
-                "已上评同步主跑有异常",
-                f"{summarize_issues(issues)}。14:40 会自动补跑。",
-            )
-        else:
-            notify(
-                "已上评同步补跑后仍异常",
-                summarize_issues(issues),
-            )
-        return 1
+        message = build_notification_message(args.mode, issues)
+        if message:
+            notify(NOTIFY_TITLE, message)
+        return 1 if failed_issues else 0
     return 0
 
 

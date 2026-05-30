@@ -535,6 +535,69 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertIn("<key>REVIEW_STATUS_PYTHON_BIN</key>", install_script)
         self.assertIn("<key>PATH</key>", install_script)
 
+    def test_run_review_status_notification_messages_and_retry_gate(self) -> None:
+        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        self.assertEqual(
+            module.build_notification_message(
+                "main",
+                [{"type": "missing_orders", "store_name": "抱树的koala小姐", "missing_count": 2}],
+            ),
+            "漏上评2条。抱树的koala小姐2条。",
+        )
+        self.assertEqual(
+            module.build_notification_message(
+                "main",
+                [{"type": "store_failed", "store_name": "抱树的koala小姐", "message": "error"}],
+            ),
+            "检查失败。抱树的koala小姐失败。",
+        )
+        self.assertEqual(
+            module.build_notification_message(
+                "retry",
+                [{"type": "store_failed", "store_name": "抱树的koala小姐", "message": "error"}],
+            ),
+            "补查失败。抱树的koala小姐失败。",
+        )
+
+        with tempfile.TemporaryDirectory(prefix="review-status-gate-") as temp_dir:
+            status_file = Path(temp_dir) / "status_latest.json"
+            original = module.LATEST_STATUS_FILE
+            module.LATEST_STATUS_FILE = status_file
+            try:
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-05-30",
+                            "mode": "main",
+                            "issues": [{"type": "missing_orders", "store_name": "抱树的koala小姐", "missing_count": 1}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertFalse(module.should_run_scheduled_retry("2026-05-30"))
+
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-05-30",
+                            "mode": "main",
+                            "issues": [{"type": "store_failed", "store_name": "抱树的koala小姐", "message": "error"}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertTrue(module.should_run_scheduled_retry("2026-05-30"))
+            finally:
+                module.LATEST_STATUS_FILE = original
+
     def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
             root = Path(temp_dir)
@@ -661,6 +724,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "README.md", "已上评"),
             (REPO_ROOT / "README.md", "14:00"),
+            (REPO_ROOT / "README.md", "14:20"),
             (REPO_ROOT / "README.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "README.md", "自动删除"),
             (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
@@ -675,6 +739,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "AGENTS.md", "sync_feishu_review_status.py"),
             (REPO_ROOT / "AGENTS.md", "14:00 主跑"),
+            (REPO_ROOT / "AGENTS.md", "14:20"),
             (REPO_ROOT / "AGENTS.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "AGENTS.md", "删掉本轮评价导出临时文件"),
             (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
@@ -686,12 +751,14 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "不能用固定时间间隔"),
             (REPO_ROOT / "HANDOVER.md", "默认一轮不超过 5 单"),
             (REPO_ROOT / "HANDOVER.md", "14:00 主跑"),
+            (REPO_ROOT / "HANDOVER.md", "14:20"),
             (REPO_ROOT / "HANDOVER.md", "补跑"),
             (REPO_ROOT / "HANDOVER.md", "run_review_status_sync.py"),
             (REPO_ROOT / "HANDOVER.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "install_review_status_launchagent.sh"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "14:20"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "固定节奏连续查询"),
