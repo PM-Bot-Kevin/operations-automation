@@ -988,6 +988,32 @@ print(json.dumps(payload, ensure_ascii=False))
                 module.LATEST_MAIN_STATUS_FILE = original_latest_main_status
                 module.LATEST_RETRY_STATUS_FILE = original_latest_retry_status
 
+    def test_run_review_status_resolves_workspace_root_from_release_copy(self) -> None:
+        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        workspace_root = Path("/tmp/ops-workspace")
+        release_code_root = workspace_root / "releases" / "20260531-170153-cb714d1"
+        self.assertEqual(module.resolve_workspace_root(release_code_root), workspace_root)
+        self.assertEqual(module.resolve_workspace_root(workspace_root), workspace_root)
+
+    def test_sync_review_status_resolves_workspace_root_from_release_copy(self) -> None:
+        script = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        workspace_root = Path("/tmp/ops-workspace")
+        release_code_root = workspace_root / "releases" / "20260531-170153-cb714d1"
+        self.assertEqual(module.resolve_workspace_root(release_code_root), workspace_root)
+        self.assertEqual(module.resolve_workspace_root(workspace_root), workspace_root)
+
     def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
             root = Path(temp_dir)

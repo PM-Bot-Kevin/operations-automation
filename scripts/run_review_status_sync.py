@@ -13,9 +13,16 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
-RUNTIME_DIR = REPO_ROOT / "runtime" / "review_status_sync"
+def resolve_workspace_root(code_root: Path) -> Path:
+    if code_root.parent.name == "releases":
+        return code_root.parents[1]
+    return code_root
+
+
+CODE_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = resolve_workspace_root(CODE_ROOT)
+SYNC_SCRIPT = CODE_ROOT / "scripts" / "sync_feishu_review_status.py"
+RUNTIME_DIR = (WORKSPACE_ROOT / "runtime" / "review_status_sync").resolve()
 PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
 LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
 LATEST_MAIN_STATUS_FILE = RUNTIME_DIR / "status_latest_main.json"
@@ -41,7 +48,7 @@ def irregular_pause(min_seconds: float, max_seconds: float) -> None:
 def run_json_command(args: list[str]) -> dict[str, Any]:
     completed = subprocess.run(
         args,
-        cwd=REPO_ROOT,
+        cwd=CODE_ROOT,
         check=False,
         capture_output=True,
         text=True,

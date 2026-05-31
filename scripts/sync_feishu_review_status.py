@@ -16,8 +16,15 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = REPO_ROOT / "scripts"
+def resolve_workspace_root(code_root: Path) -> Path:
+    if code_root.parent.name == "releases":
+        return code_root.parents[1]
+    return code_root
+
+
+CODE_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = resolve_workspace_root(CODE_ROOT)
+SCRIPTS_DIR = CODE_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -51,8 +58,8 @@ DEFAULT_DATE_FIELD = "上评日期"
 DEFAULT_CHECKED_FIELD = "已上评"
 DEFAULT_DESKTOP_DIR = Path.home() / "Desktop"
 DEFAULT_DOWNLOADS_DIR = Path.home() / "Downloads"
-DEFAULT_EXPORT_DIR = REPO_ROOT / "runtime" / "review_status_exports"
-DEFAULT_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
+DEFAULT_EXPORT_DIR = (WORKSPACE_ROOT / "runtime" / "review_status_exports").resolve()
+DEFAULT_GUARDRAILS_PATH = CODE_ROOT / "config" / "xhs_qianfan_guardrails.json"
 KNOWN_LARK_CLI_PATHS = [
     Path.home() / ".codex/skills/fill-product-db/node_modules/@larksuite/cli/bin/lark-cli",
 ]
