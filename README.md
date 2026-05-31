@@ -193,6 +193,7 @@ bash scripts/install_review_status_launchagent.sh
 - 这里保留 Python 3.11 + `pyautogui` 不是因为它还是主链路，而是为了鼠标兜底可随时接管
 - 页面就算被关掉，正式任务也会先复用对应店铺 Chrome 资料重新打开评价管理页，再走搜索和导出
 - 每轮任务用到的评价导出临时文件，任务结束后会自动删除，不在桌面和运行目录长期残留
+- 每轮任务结束后，会优先按“本轮新开的窗口 ID”自动关任务窗口；如果没拿到可用窗口 ID，但前台仍是任务评价页，就直接用 `AX` 关前台任务窗口；再不行才退回按评价页 URL 收尾关闭。关窗失败只记日志，不会把本轮已成功的同步结果打成失败
 - 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
 - 涉及千帆后台时，依然继续复用 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 里的极度保守口径
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我同步已上评”或类似意思，助手应直接按这套流程执行，不要再临时发明别的链路

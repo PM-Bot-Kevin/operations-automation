@@ -123,6 +123,55 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertTrue(any("set index of currentWindow to 1" in part for part in command))
         self.assertIn("app-item/comment/analysis", command)
 
+    def test_qianfan_access_lists_and_closes_windows_safely(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module.subprocess, "run") as mocked_run:
+            mocked_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=["osascript"],
+                    returncode=0,
+                    stdout="101\thttps://example.com\n202\thttps://ark.xiaohongshu.com/app-item/comment/analysis\n",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["osascript"],
+                    returncode=0,
+                    stdout="202\n",
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=["osascript"],
+                    returncode=0,
+                    stdout="https://ark.xiaohongshu.com/app-item/comment/analysis\n",
+                    stderr="",
+                ),
+            ]
+
+            descriptors = module.list_window_descriptors()
+            closed_id = module.close_window_by_id(202)
+            closed_url = module.close_window_by_url("app-item/comment/analysis", prefer_last=True)
+
+        self.assertEqual(
+            descriptors,
+            [
+                {"window_id": 101, "active_url": "https://example.com"},
+                {"window_id": 202, "active_url": "https://ark.xiaohongshu.com/app-item/comment/analysis"},
+            ],
+        )
+        self.assertEqual(closed_id, 202)
+        self.assertEqual(closed_url, "https://ark.xiaohongshu.com/app-item/comment/analysis")
+        close_id_command = " ".join(mocked_run.call_args_list[1].args[0])
+        self.assertIn("targetWindowId", close_id_command)
+        self.assertIn("202", close_id_command)
+        close_url_command = " ".join(mocked_run.call_args_list[2].args[0])
+        self.assertIn("preferLast", close_url_command)
+        self.assertIn("app-item/comment/analysis", close_url_command)
+
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
         spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
         assert spec and spec.loader
@@ -719,6 +768,89 @@ print(json.dumps(payload, ensure_ascii=False))
         browser_mock.assert_called_once()
         ax_mock.assert_not_called()
         mouse_mock.assert_not_called()
+
+    def test_sync_review_status_ax_flow_attempts_safe_window_close(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        controls = {
+            "start_date_field": module.ChromeUiElement(11, "AXTextField", "", "", "", (0, 0), (10, 10)),
+            "end_date_field": module.ChromeUiElement(12, "AXTextField", "", "", "", (0, 0), (10, 10)),
+            "search_button": module.ChromeUiElement(13, "AXButton", "搜索", "", "", (0, 0), (10, 10)),
+            "export_button": module.ChromeUiElement(14, "AXButton", "全部导出", "", "", (0, 0), (10, 10)),
+        }
+        capture = {
+            "source_file": "/tmp/source.csv",
+            "saved_file": "/tmp/export.csv",
+            "saved_at": "20260531-170000",
+        }
+        profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+        with (
+            mock.patch.object(module, "snapshot_window_ids", return_value={1, 2}),
+            mock.patch.object(module, "open_page"),
+            mock.patch.object(module, "irregular_pause"),
+            mock.patch.object(module, "wait_for_front_window", side_effect=[{"elements": []}, {"elements": []}]),
+            mock.patch.object(module, "detect_opened_window_id", return_value=88),
+            mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
+            mock.patch.object(module, "set_front_window_element_value"),
+            mock.patch.object(module, "press_front_window_element"),
+            mock.patch.object(module, "wait_for_export_capture", return_value=capture),
+            mock.patch.object(module, "close_opened_comment_window") as close_mock,
+        ):
+            payload = module.export_store_via_ax(
+                store_name="抱树的koala小姐",
+                profile=profile,
+                start_date="2026-05-27",
+                end_date="2026-05-31",
+                desktop_dir=Path("/tmp/Desktop"),
+                downloads_dir=Path("/tmp/Downloads"),
+                output_dir=Path("/tmp/saved"),
+                export_timeout_seconds=120,
+            )
+
+        self.assertEqual(payload["interaction_mode"], "ax")
+        self.assertEqual(payload["saved_file"], "/tmp/export.csv")
+        close_mock.assert_called_once_with(88)
+
+    def test_sync_review_status_safe_window_close_never_breaks_main_flow(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module, "close_window_by_id", side_effect=module.ReviewSyncError("close failed")),
+            mock.patch.object(module, "front_window_active_url", side_effect=module.ReviewSyncError("front url failed")),
+            mock.patch.object(module, "close_window_by_url", side_effect=module.ReviewSyncError("url close failed")),
+            mock.patch.object(module, "log_step") as log_mock,
+        ):
+            module.close_opened_comment_window(88)
+
+        log_mock.assert_called()
+        self.assertIn("收尾关闭失败", log_mock.call_args.args[0])
+
+    def test_sync_review_status_safe_window_close_uses_ax_for_front_comment_page(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module, "front_window_active_url", return_value=module.PAGE_URLS["comments"]),
+            mock.patch.object(module, "close_front_window_via_ax") as close_ax_mock,
+            mock.patch.object(module, "close_window_by_url") as close_url_mock,
+            mock.patch.object(module, "log_step") as log_mock,
+        ):
+            module.close_opened_comment_window(None)
+
+        close_ax_mock.assert_called_once()
+        close_url_mock.assert_not_called()
+        self.assertTrue(any("AX 关闭前台任务窗口" in call.args[0] for call in log_mock.call_args_list))
 
     def test_review_status_launch_scripts_pin_python_path(self) -> None:
         main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")

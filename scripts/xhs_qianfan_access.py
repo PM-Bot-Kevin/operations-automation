@@ -269,6 +269,117 @@ def close_front_window(app_name: str = CHROME_APP_NAME) -> None:
     )
 
 
+def list_window_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, Any]]:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持读取 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
+    raw_output = _run_osascript(
+        [
+            f'tell application "{CHROME_APP_NAME}"',
+            "set outputLines to {}",
+            "repeat with windowIndex from 1 to count of windows",
+            "set currentWindow to window windowIndex",
+            'set currentUrl to ""',
+            "try",
+            "set currentUrl to URL of active tab of currentWindow",
+            "end try",
+            'set end of outputLines to ((id of currentWindow as text) & (ASCII character 9) & currentUrl)',
+            "end repeat",
+            "set previousDelimiters to AppleScript's text item delimiters",
+            "set AppleScript's text item delimiters to linefeed",
+            "set outputText to outputLines as text",
+            "set AppleScript's text item delimiters to previousDelimiters",
+            "return outputText",
+            "end tell",
+        ],
+    )
+    descriptors: list[dict[str, Any]] = []
+    for line in raw_output.splitlines():
+        if not line.strip():
+            continue
+        window_id_text, _, active_url = line.partition("\t")
+        window_id_text = window_id_text.strip()
+        if not window_id_text.isdigit():
+            continue
+        descriptors.append(
+            {
+                "window_id": int(window_id_text),
+                "active_url": active_url.strip(),
+            }
+        )
+    return descriptors
+
+
+def close_window_by_id(window_id: int, app_name: str = CHROME_APP_NAME) -> int:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
+    if window_id <= 0:
+        raise QianfanAccessError("关闭窗口时 window_id 必须是正整数。")
+    return int(
+        _run_osascript(
+            [
+                "on run argv",
+                "set targetWindowId to (item 1 of argv) as integer",
+                f'tell application "{CHROME_APP_NAME}"',
+                "repeat with windowIndex from (count of windows) to 1 by -1",
+                "set currentWindow to window windowIndex",
+                "if (id of currentWindow) is targetWindowId then",
+                "close currentWindow",
+                "return targetWindowId as text",
+                "end if",
+                "end repeat",
+                'error "没有找到匹配窗口"',
+                "end tell",
+                "end run",
+            ],
+            [str(window_id)],
+        )
+    )
+
+
+def close_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME, prefer_last: bool = True) -> str:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
+    if not url_contains:
+        raise QianfanAccessError("关闭窗口时 url_contains 不能为空。")
+    return _run_osascript(
+        [
+            "on run argv",
+            "set targetUrl to item 1 of argv",
+            "set preferLast to (item 2 of argv) is \"1\"",
+            f'tell application "{CHROME_APP_NAME}"',
+            "if preferLast then",
+            "repeat with windowIndex from (count of windows) to 1 by -1",
+            "set currentWindow to window windowIndex",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            "set currentUrl to URL of currentTab",
+            "if currentUrl contains targetUrl then",
+            "close currentWindow",
+            "return currentUrl",
+            "end if",
+            "end repeat",
+            "end repeat",
+            "else",
+            "repeat with windowIndex from 1 to count of windows",
+            "set currentWindow to window windowIndex",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            "set currentUrl to URL of currentTab",
+            "if currentUrl contains targetUrl then",
+            "close currentWindow",
+            "return currentUrl",
+            "end if",
+            "end repeat",
+            "end repeat",
+            "end if",
+            'error "没有找到匹配目标地址的 Chrome 窗口"',
+            "end tell",
+            "end run",
+        ],
+        [url_contains, "1" if prefer_last else "0"],
+    )
+
+
 def focus_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME) -> str:
     if app_name != CHROME_APP_NAME:
         raise QianfanAccessError(f"当前只支持聚焦 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
@@ -446,6 +557,30 @@ def capture_front_window_ui(app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
         "window_title": window_title,
         "elements": elements,
     }
+
+
+def front_window_active_url(app_name: str = CHROME_APP_NAME) -> str:
+    snapshot = capture_front_window_ui(app_name)
+    elements: list[ChromeUiElement] = snapshot["elements"]
+    address_bars = [
+        element
+        for element in elements
+        if element.role == "AXTextField" and element.description == "地址和搜索栏"
+    ]
+    return address_bars[0].value if address_bars else ""
+
+
+def close_front_window_via_ax(app_name: str = CHROME_APP_NAME) -> None:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 前台窗口，不支持：{app_name}")
+    window_ref = _front_window_reference(app_name)
+    close_button = _copy_attribute(window_ref, "AXCloseButton")
+    if not close_button:
+        raise QianfanAccessError("当前前台窗口没有可访问的关闭按钮。")
+    action = _cf_string("AXPress")
+    error_code = _APPLICATION_SERVICES.AXUIElementPerformAction(close_button, action)
+    if error_code != 0:
+        raise QianfanAccessError(f"关闭前台窗口失败，错误码：{error_code}")
 
 
 def wait_for_front_window(
