@@ -18,6 +18,8 @@ SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
 RUNTIME_DIR = REPO_ROOT / "runtime" / "review_status_sync"
 PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
 LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
+LATEST_MAIN_STATUS_FILE = RUNTIME_DIR / "status_latest_main.json"
+LATEST_RETRY_STATUS_FILE = RUNTIME_DIR / "status_latest_retry.json"
 PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"
 NOTIFY_TITLE = "好评漏上评检查_自动任务"
 
@@ -82,11 +84,21 @@ def load_latest_status() -> dict[str, Any] | None:
         return None
 
 
+def mode_latest_status_file(mode: str) -> Path:
+    if mode == "main":
+        return LATEST_MAIN_STATUS_FILE
+    if mode == "retry":
+        return LATEST_RETRY_STATUS_FILE
+    return RUNTIME_DIR / f"status_latest_{mode}.json"
+
+
 def save_status(status: dict[str, Any]) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    dated_file = RUNTIME_DIR / f"status_{status['today']}.json"
+    mode = str(status.get("mode", "unknown"))
+    dated_file = RUNTIME_DIR / f"status_{status['today']}_{mode}.json"
     payload = json.dumps(status, ensure_ascii=False, indent=2) + "\n"
     dated_file.write_text(payload, encoding="utf-8")
+    mode_latest_status_file(mode).write_text(payload, encoding="utf-8")
     LATEST_STATUS_FILE.write_text(payload, encoding="utf-8")
 
 

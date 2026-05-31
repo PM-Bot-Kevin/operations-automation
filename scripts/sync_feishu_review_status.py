@@ -23,13 +23,17 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
-    ChromeProfile,
     ChromeUiElement,
     PAGE_URLS,
+    close_front_window,
     element_center,
+    focus_window_by_url,
     load_profiles,
     open_page,
+    press_front_window_element,
     resolve_profile,
+    run_front_window_javascript,
+    set_front_window_element_value,
     wait_for_front_window,
 )
 
@@ -50,6 +54,7 @@ KNOWN_LARK_CLI_PATHS = [
 ]
 ORDER_COLUMN_CANDIDATES = ("订单id", "订单ID", "订单号")
 DATE_TEXTFIELD_COMMIT_KEY = "tab"
+DEFAULT_EXPORT_INTERACTION_MODE = "auto"
 
 
 class ReviewSyncError(RuntimeError):
@@ -122,6 +127,12 @@ def parse_args() -> argparse.Namespace:
     export_parser.add_argument("--output-dir", default=str(DEFAULT_EXPORT_DIR))
     export_parser.add_argument("--local-state-path", default=str(DEFAULT_LOCAL_STATE_PATH))
     export_parser.add_argument("--export-timeout-seconds", type=int, default=420)
+    export_parser.add_argument(
+        "--interaction-mode",
+        choices=("auto", "browser_js", "ax", "mouse"),
+        default=DEFAULT_EXPORT_INTERACTION_MODE,
+        help="评价导出交互方式。默认先走 ax，不行再降级到 mouse；browser_js 仅用于显式验证。",
+    )
     export_parser.add_argument("--format", choices=("text", "json"), default="text")
     export_parser.add_argument("--output", default="")
     return parser.parse_args()
@@ -561,6 +572,374 @@ def file_is_stable(path: Path, *, stable_seconds: float = 2.5) -> bool:
     return second.st_size > 0 and first.st_size == second.st_size and int(first.st_mtime) == int(second.st_mtime)
 
 
+def build_comment_page_poll_script() -> str:
+    return """
+(function () {
+  function visible(node) {
+    if (!node) return false;
+    var style = window.getComputedStyle(node);
+    var rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }
+  function normalize(text) {
+    return String(text || '').replace(/\\s+/g, '');
+  }
+  var bodyText = String((document.body && document.body.innerText) || '').replace(/\\s+/g, ' ');
+  var buttons = document.querySelectorAll('button, [role="button"], .ant-btn');
+  var exportButton = null;
+  var index = 0;
+  for (index = 0; index < buttons.length; index += 1) {
+    if (visible(buttons[index]) && normalize(buttons[index].innerText || buttons[index].textContent) === '全部导出') {
+      exportButton = buttons[index];
+      break;
+    }
+  }
+  var loadingNode = document.querySelector('.ant-spin-spinning, .ant-skeleton-active, [aria-busy="true"], .loading, .is-loading');
+  return JSON.stringify({
+    ok: true,
+    ready: Boolean(exportButton) && !loadingNode,
+    hasExportButton: Boolean(exportButton),
+    hasSearchText: bodyText.indexOf('搜索') >= 0,
+    loading: Boolean(loadingNode)
+  });
+})()
+""".strip()
+
+
+def build_comment_page_fill_and_search_script(start_date: str, end_date: str) -> str:
+    start_json = json.dumps(start_date, ensure_ascii=False)
+    end_json = json.dumps(end_date, ensure_ascii=False)
+    return f"""
+((function () {{
+  function visible(node) {{
+    if (!node) return false;
+    var style = window.getComputedStyle(node);
+    var rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }}
+  function normalize(text) {{
+    return String(text || '').replace(/\\s+/g, '');
+  }}
+  var inputValueDescriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+  var nativeSetter = inputValueDescriptor && inputValueDescriptor.set;
+  function setValue(input, value) {{
+    input.focus();
+    if (nativeSetter) {{
+      nativeSetter.call(input, value);
+    }} else {{
+      input.value = value;
+    }}
+    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    input.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Tab', bubbles: true }}));
+    input.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Tab', bubbles: true }}));
+    input.blur();
+  }}
+  var rawInputs = document.querySelectorAll('input');
+  var inputs = [];
+  var index = 0;
+  for (index = 0; index < rawInputs.length; index += 1) {{
+    if (visible(rawInputs[index]) && normalize(rawInputs[index].placeholder).indexOf('请选择日期') >= 0) {{
+      inputs.push(rawInputs[index]);
+      if (inputs.length === 2) {{
+        break;
+      }}
+    }}
+  }}
+  if (inputs.length < 2) {{
+    return JSON.stringify({{ ok: false, error: '找不到日期输入框，当前只找到 ' + inputs.length + ' 个' }});
+  }}
+  setValue(inputs[0], {start_json});
+  setValue(inputs[1], {end_json});
+  var buttons = document.querySelectorAll('button, [role="button"], .ant-btn');
+  var searchButton = null;
+  for (index = 0; index < buttons.length; index += 1) {{
+    if (visible(buttons[index]) && normalize(buttons[index].innerText || buttons[index].textContent) === '搜索') {{
+      searchButton = buttons[index];
+      break;
+    }}
+  }}
+  if (!searchButton) {{
+    return JSON.stringify({{ ok: false, error: '找不到搜索按钮' }});
+  }}
+  searchButton.click();
+  return JSON.stringify({{
+    ok: true,
+    action: 'search',
+    startDate: inputs[0].value,
+    endDate: inputs[1].value
+  }});
+}})())
+""".strip()
+
+
+def build_comment_page_export_script() -> str:
+    return """
+(function () {
+  function visible(node) {
+    if (!node) return false;
+    var style = window.getComputedStyle(node);
+    var rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }
+  function normalize(text) {
+    return String(text || '').replace(/\\s+/g, '');
+  }
+  var buttons = document.querySelectorAll('button, [role="button"], .ant-btn');
+  var exportButton = null;
+  var index = 0;
+  for (index = 0; index < buttons.length; index += 1) {
+    if (visible(buttons[index]) && normalize(buttons[index].innerText || buttons[index].textContent) === '全部导出') {
+      exportButton = buttons[index];
+      break;
+    }
+  }
+  if (!exportButton) {
+    return JSON.stringify({ ok: false, error: '找不到全部导出按钮' });
+  }
+  exportButton.click();
+  return JSON.stringify({ ok: true, action: 'export' });
+})()
+""".strip()
+
+
+def run_front_window_json(script: str) -> dict[str, Any]:
+    try:
+        raw = run_front_window_javascript(script)
+    except Exception as exc:
+        raise ReviewSyncError(f"Chrome 页内执行失败：{exc}") from exc
+    try:
+        return json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise ReviewSyncError(f"无法解析 Chrome 页内返回：{raw[:200]}") from exc
+
+
+def ensure_browser_js_ok(result: dict[str, Any], *, action: str) -> dict[str, Any]:
+    if result.get("ok"):
+        return result
+    detail = str(result.get("error", "")).strip() or "未知错误"
+    raise ReviewSyncError(f"{action}失败：{detail}")
+
+
+def wait_for_comment_page_ready_via_browser_js(timeout_seconds: int = 30, poll_seconds: float = 1.5) -> None:
+    deadline = time.time() + max(timeout_seconds, 5)
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            result = run_front_window_json(build_comment_page_poll_script())
+            ensure_browser_js_ok(result, action="检查评价页状态")
+            if result.get("ready"):
+                return
+            last_error = ReviewSyncError("页面结果仍在加载，暂不执行导出。")
+        except Exception as exc:
+            last_error = exc
+        time.sleep(poll_seconds)
+    raise ReviewSyncError("等待评价页搜索结果稳定超时。") from last_error
+
+
+def export_store_via_browser_js(
+    *,
+    store_name: str,
+    profile: Any,
+    start_date: str,
+    end_date: str,
+    desktop_dir: Path,
+    downloads_dir: Path,
+    output_dir: Path,
+    export_timeout_seconds: int,
+) -> dict[str, Any]:
+    after_time = datetime.now()
+    try:
+        log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
+        open_page(profile, "comments", dry_run=False)
+        irregular_pause(3.0, 6.0)
+        focus_window_by_url(PAGE_URLS["comments"])
+        wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("评价时间", "搜索", "全部导出"),
+            timeout_seconds=35,
+        )
+        log_step("评价页就绪，开始页内写入日期并搜索")
+        fill_result = ensure_browser_js_ok(
+            run_front_window_json(build_comment_page_fill_and_search_script(start_date, end_date)),
+            action="填写日期并搜索",
+        )
+        log_step(f"已写入日期范围：{fill_result.get('startDate', start_date)} ~ {fill_result.get('endDate', end_date)}")
+        wait_for_comment_page_ready_via_browser_js(timeout_seconds=35, poll_seconds=1.8)
+        log_step("搜索结果已稳定，开始页内点击全部导出")
+        ensure_browser_js_ok(
+            run_front_window_json(build_comment_page_export_script()),
+            action="点击全部导出",
+        )
+        irregular_pause(1.8, 3.2)
+        log_step("开始接住桌面导出文件")
+        capture = wait_for_export_capture(
+            store_name=store_name,
+            after_time=after_time,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            timeout_seconds=export_timeout_seconds,
+        )
+        log_step(f"已保存导出文件：{capture['saved_file']}")
+        return {
+            "interaction_mode": "browser_js",
+            "store_name": store_name,
+            "profile_name": profile.name or profile.directory,
+            "profile_directory": profile.directory,
+            "start_date": start_date,
+            "end_date": end_date,
+            "source_file": capture["source_file"],
+            "saved_file": capture["saved_file"],
+            "saved_at": capture["saved_at"],
+        }
+    finally:
+        try:
+            close_front_window()
+        except Exception:
+            pass
+
+
+def export_store_via_mouse(
+    *,
+    store_name: str,
+    profile: Any,
+    start_date: str,
+    end_date: str,
+    desktop_dir: Path,
+    downloads_dir: Path,
+    output_dir: Path,
+    export_timeout_seconds: int,
+) -> dict[str, Any]:
+    after_time = datetime.now()
+    pyautogui = _load_pyautogui()
+    try:
+        log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
+        open_page(profile, "comments", dry_run=False)
+        irregular_pause(3.0, 6.0)
+        snapshot = wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("评价时间", "搜索", "全部导出"),
+            timeout_seconds=35,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        log_step("定位评价页成功，开始低频填写日期")
+
+        replace_text(pyautogui, element_center(controls["start_date_field"]), start_date)
+        irregular_pause(0.8, 1.8)
+        replace_text(pyautogui, element_center(controls["end_date_field"]), end_date)
+        irregular_pause(1.0, 2.0)
+        log_step(f"已写入日期范围：{start_date} ~ {end_date}")
+
+        move_and_click(pyautogui, element_center(controls["search_button"]))
+        log_step("已点击搜索，等待页面整理结果")
+        irregular_pause(4.0, 8.0)
+
+        snapshot = wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("全部导出",),
+            timeout_seconds=25,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        move_and_click(pyautogui, element_center(controls["export_button"]))
+        log_step("已点击全部导出，等待桌面文件稳定落地")
+        irregular_pause(2.5, 4.5)
+
+        log_step("开始接住桌面导出文件")
+        capture = wait_for_export_capture(
+            store_name=store_name,
+            after_time=after_time,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            timeout_seconds=export_timeout_seconds,
+        )
+        log_step(f"已保存导出文件：{capture['saved_file']}")
+        return {
+            "interaction_mode": "mouse",
+            "store_name": store_name,
+            "profile_name": profile.name or profile.directory,
+            "profile_directory": profile.directory,
+            "start_date": start_date,
+            "end_date": end_date,
+            "source_file": capture["source_file"],
+            "saved_file": capture["saved_file"],
+            "saved_at": capture["saved_at"],
+        }
+    finally:
+        close_comment_window(pyautogui)
+
+
+def export_store_via_ax(
+    *,
+    store_name: str,
+    profile: Any,
+    start_date: str,
+    end_date: str,
+    desktop_dir: Path,
+    downloads_dir: Path,
+    output_dir: Path,
+    export_timeout_seconds: int,
+) -> dict[str, Any]:
+    after_time = datetime.now()
+    try:
+        log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
+        open_page(profile, "comments", dry_run=False)
+        irregular_pause(3.0, 6.0)
+        snapshot = wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("评价时间", "搜索", "全部导出"),
+            timeout_seconds=35,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        log_step("定位评价页成功，开始 AX 填写日期")
+        set_front_window_element_value(controls["start_date_field"].index, start_date)
+        irregular_pause(0.5, 1.2)
+        set_front_window_element_value(controls["end_date_field"].index, end_date)
+        irregular_pause(0.8, 1.5)
+        log_step(f"已写入日期范围：{start_date} ~ {end_date}")
+        press_front_window_element(controls["search_button"].index)
+        log_step("已触发搜索，等待页面整理结果")
+        irregular_pause(4.0, 8.0)
+        snapshot = wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["comments"],
+            required_texts=("全部导出",),
+            timeout_seconds=25,
+        )
+        controls = locate_comment_page_controls(snapshot)
+        press_front_window_element(controls["export_button"].index)
+        log_step("已触发全部导出，等待桌面文件稳定落地")
+        irregular_pause(2.5, 4.5)
+        log_step("开始接住桌面导出文件")
+        capture = wait_for_export_capture(
+            store_name=store_name,
+            after_time=after_time,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            timeout_seconds=export_timeout_seconds,
+        )
+        log_step(f"已保存导出文件：{capture['saved_file']}")
+        return {
+            "interaction_mode": "ax",
+            "store_name": store_name,
+            "profile_name": profile.name or profile.directory,
+            "profile_directory": profile.directory,
+            "start_date": start_date,
+            "end_date": end_date,
+            "source_file": capture["source_file"],
+            "saved_file": capture["saved_file"],
+            "saved_at": capture["saved_at"],
+        }
+    finally:
+        pass
+
+
 def wait_for_export_capture(
     *,
     store_name: str,
@@ -602,65 +981,70 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = Path(args.output_dir).expanduser().resolve()
     profiles = load_profiles(local_state_path)
     profile = resolve_profile(profiles, store["store_name"])
-    after_time = datetime.now()
-    pyautogui = _load_pyautogui()
+    interaction_mode = getattr(args, "interaction_mode", DEFAULT_EXPORT_INTERACTION_MODE)
 
-    try:
-        log_step(f"打开店铺评价页：{store['store_name']} ({profile.directory})")
-        open_page(profile, "comments", dry_run=False)
-        irregular_pause(3.0, 6.0)
-        snapshot = wait_for_front_window(
-            title_contains=store["store_name"],
-            url_contains=PAGE_URLS["comments"],
-            required_texts=("评价时间", "搜索", "全部导出"),
-            timeout_seconds=35,
-        )
-        controls = locate_comment_page_controls(snapshot)
-        log_step("定位评价页成功，开始低频填写日期")
-
-        replace_text(pyautogui, element_center(controls["start_date_field"]), start_date)
-        irregular_pause(0.8, 1.8)
-        replace_text(pyautogui, element_center(controls["end_date_field"]), end_date)
-        irregular_pause(1.0, 2.0)
-        log_step(f"已写入日期范围：{start_date} ~ {end_date}")
-
-        move_and_click(pyautogui, element_center(controls["search_button"]))
-        log_step("已点击搜索，等待页面整理结果")
-        irregular_pause(4.0, 8.0)
-
-        snapshot = wait_for_front_window(
-            title_contains=store["store_name"],
-            url_contains=PAGE_URLS["comments"],
-            required_texts=("全部导出",),
-            timeout_seconds=25,
-        )
-        controls = locate_comment_page_controls(snapshot)
-        move_and_click(pyautogui, element_center(controls["export_button"]))
-        log_step("已点击全部导出，等待桌面文件稳定落地")
-        irregular_pause(2.5, 4.5)
-
-        log_step("开始接住桌面导出文件")
-        capture = wait_for_export_capture(
+    if interaction_mode == "ax":
+        return export_store_via_ax(
             store_name=store["store_name"],
-            after_time=after_time,
+            profile=profile,
+            start_date=start_date,
+            end_date=end_date,
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
-            timeout_seconds=args.export_timeout_seconds,
+            export_timeout_seconds=args.export_timeout_seconds,
         )
-        log_step(f"已保存导出文件：{capture['saved_file']}")
-        return {
-            "store_name": store["store_name"],
-            "profile_name": profile.name or profile.directory,
-            "profile_directory": profile.directory,
-            "start_date": start_date,
-            "end_date": end_date,
-            "source_file": capture["source_file"],
-            "saved_file": capture["saved_file"],
-            "saved_at": capture["saved_at"],
-        }
-    finally:
-        close_comment_window(pyautogui)
+
+    if interaction_mode == "mouse":
+        return export_store_via_mouse(
+            store_name=store["store_name"],
+            profile=profile,
+            start_date=start_date,
+            end_date=end_date,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            export_timeout_seconds=args.export_timeout_seconds,
+        )
+
+    if interaction_mode == "auto":
+        try:
+            return export_store_via_ax(
+                store_name=store["store_name"],
+                profile=profile,
+                start_date=start_date,
+                end_date=end_date,
+                desktop_dir=desktop_dir,
+                downloads_dir=downloads_dir,
+                output_dir=output_dir,
+                export_timeout_seconds=args.export_timeout_seconds,
+            )
+        except Exception as ax_exc:
+            log_step(f"AX 失败，切换鼠标兜底：{ax_exc}")
+            return export_store_via_mouse(
+                store_name=store["store_name"],
+                profile=profile,
+                start_date=start_date,
+                end_date=end_date,
+                desktop_dir=desktop_dir,
+                downloads_dir=downloads_dir,
+                output_dir=output_dir,
+                export_timeout_seconds=args.export_timeout_seconds,
+            )
+
+    if interaction_mode != "browser_js":
+        raise ReviewSyncError(f"不支持的导出交互方式：{interaction_mode}")
+
+    return export_store_via_browser_js(
+        store_name=store["store_name"],
+        profile=profile,
+        start_date=start_date,
+        end_date=end_date,
+        desktop_dir=desktop_dir,
+        downloads_dir=downloads_dir,
+        output_dir=output_dir,
+        export_timeout_seconds=args.export_timeout_seconds,
+    )
 
 
 def load_plan(plan_path: Path) -> dict[str, Any]:
@@ -800,6 +1184,7 @@ def render_export_text(payload: dict[str, Any]) -> str:
     return "\n".join(
         [
             f"已为 {payload['store_name']} 导出评价 CSV",
+            f"执行方式：{payload.get('interaction_mode', 'unknown')}",
             f"日期范围：{payload['start_date']} ~ {payload['end_date']}",
             f"来源文件：{payload['source_file']}",
             f"保存为：{payload['saved_file']}",

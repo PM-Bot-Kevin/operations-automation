@@ -74,6 +74,8 @@ _APPLICATION_SERVICES.AXUIElementCopyAttributeValue.argtypes = [AXUIElementRef, 
 _APPLICATION_SERVICES.AXUIElementCopyAttributeValue.restype = c_int32
 _APPLICATION_SERVICES.AXUIElementPerformAction.argtypes = [AXUIElementRef, CFStringRef]
 _APPLICATION_SERVICES.AXUIElementPerformAction.restype = c_int32
+_APPLICATION_SERVICES.AXUIElementSetAttributeValue.argtypes = [AXUIElementRef, CFStringRef, CFTypeRef]
+_APPLICATION_SERVICES.AXUIElementSetAttributeValue.restype = c_int32
 _APPLICATION_SERVICES.AXValueGetType.argtypes = [CFTypeRef]
 _APPLICATION_SERVICES.AXValueGetType.restype = c_uint32
 _APPLICATION_SERVICES.AXValueGetValue.argtypes = [CFTypeRef, c_uint32, c_void_p]
@@ -219,6 +221,85 @@ def open_page(profile: ChromeProfile, page: str, dry_run: bool) -> str:
     return target_url
 
 
+def _run_osascript(lines: list[str], args: list[str] | None = None) -> str:
+    command = ["osascript", "-l", "AppleScript"]
+    for line in lines:
+        command.extend(["-e", line])
+    if args:
+        command.extend(args)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip() or "osascript 执行失败"
+        raise QianfanAccessError(message)
+    return completed.stdout.rstrip("\n")
+
+
+def run_front_window_javascript(script: str, app_name: str = CHROME_APP_NAME) -> str:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持 {CHROME_APP_NAME} 前台页内执行，不支持：{app_name}")
+    return _run_osascript(
+        [
+            "on run argv",
+            "set jsCode to item 1 of argv",
+            f'tell application "{CHROME_APP_NAME}"',
+            'if (count of windows) is 0 then error "应用没有可见窗口"',
+            "return execute active tab of front window javascript jsCode",
+            "end tell",
+            "end run",
+        ],
+        [script],
+    )
+
+
+def close_front_window(app_name: str = CHROME_APP_NAME) -> None:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 前台窗口，不支持：{app_name}")
+    _run_osascript(
+        [
+            f'tell application "{CHROME_APP_NAME}"',
+            'if (count of windows) is 0 then error "应用没有可见窗口"',
+            "close front window",
+            "end tell",
+        ],
+    )
+
+
+def focus_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME) -> str:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持聚焦 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
+    if not url_contains:
+        raise QianfanAccessError("聚焦窗口时 url_contains 不能为空。")
+    return _run_osascript(
+        [
+            "on run argv",
+            "set targetUrl to item 1 of argv",
+            f'tell application "{CHROME_APP_NAME}"',
+            "activate",
+            "repeat with windowIndex from 1 to count of windows",
+            "set currentWindow to window windowIndex",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            "set currentUrl to URL of currentTab",
+            "if currentUrl contains targetUrl then",
+            "set active tab index of currentWindow to tabIndex",
+            "set index of currentWindow to 1",
+            "return currentUrl",
+            "end if",
+            "end repeat",
+            "end repeat",
+            'error "没有找到匹配目标地址的 Chrome 窗口"',
+            "end tell",
+            "end run",
+        ],
+        [url_contains],
+    )
+
+
 def _cf_string(text: str) -> CFStringRef:
     return _CORE_FOUNDATION.CFStringCreateWithCString(None, text.encode("utf-8"), CF_STRING_ENCODING_UTF8)
 
@@ -308,10 +389,10 @@ def _front_window_reference(app_name: str) -> AXUIElementRef:
     raise QianfanAccessError(f"应用没有可见窗口：{app_name}")
 
 
-def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement]:
+def _iter_interesting_window_elements(window_ref: AXUIElementRef):
     queue: deque[tuple[AXUIElementRef, int]] = deque([(window_ref, 0)])
     seen: set[int] = set()
-    elements: list[ChromeUiElement] = []
+    current_index = 0
 
     while queue and len(seen) < AX_MAX_NODES:
         element_ref, depth = queue.popleft()
@@ -321,16 +402,30 @@ def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement
         seen.add(pointer)
 
         role = _copy_text_attribute(element_ref, "AXRole")
+        yield element_ref, role, depth, current_index if role in AX_INTERESTING_ROLES else None
+
+        if role in AX_INTERESTING_ROLES:
+            current_index += 1
+
+        if depth >= AX_MAX_DEPTH or role in AX_SKIP_SUBTREE_ROLES:
+            continue
+        for child_ref in _copy_children(element_ref):
+            queue.append((child_ref, depth + 1))
+
+
+def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement]:
+    elements: list[ChromeUiElement] = []
+    for element_ref, role, depth, element_index in _iter_interesting_window_elements(window_ref):
         title = _copy_text_attribute(element_ref, "AXTitle")
         description = _copy_text_attribute(element_ref, "AXDescription")
         value = _copy_text_attribute(element_ref, "AXValue")
         position = _copy_point_like_attribute(element_ref, "AXPosition")
         size = _copy_point_like_attribute(element_ref, "AXSize")
 
-        if role in AX_INTERESTING_ROLES:
+        if role in AX_INTERESTING_ROLES and element_index is not None:
             elements.append(
                 ChromeUiElement(
-                    index=len(elements),
+                    index=element_index,
                     role=role,
                     title=title[:120],
                     description=description[:120],
@@ -339,12 +434,6 @@ def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement
                     size=size,
                 )
             )
-
-        if depth >= AX_MAX_DEPTH or role in AX_SKIP_SUBTREE_ROLES:
-            continue
-
-        for child_ref in _copy_children(element_ref):
-            queue.append((child_ref, depth + 1))
     return elements
 
 
@@ -416,32 +505,32 @@ def element_center(element: ChromeUiElement) -> tuple[int, int]:
 
 def press_front_window_element(element_index: int, app_name: str = CHROME_APP_NAME) -> None:
     window_ref = _front_window_reference(app_name)
-    queue: deque[tuple[AXUIElementRef, int]] = deque([(window_ref, 0)])
-    seen: set[int] = set()
-    current_index = 0
-
-    while queue and len(seen) < AX_MAX_NODES:
-        element_ref, depth = queue.popleft()
-        pointer = int(element_ref.value or 0)
-        if not pointer or pointer in seen:
-            continue
-        seen.add(pointer)
-
-        role = _copy_text_attribute(element_ref, "AXRole")
-        if role in AX_INTERESTING_ROLES:
+    for element_ref, role, depth, current_index in _iter_interesting_window_elements(window_ref):
+        if role in AX_INTERESTING_ROLES and current_index is not None:
             if current_index == element_index:
                 action = _cf_string("AXPress")
                 error_code = _APPLICATION_SERVICES.AXUIElementPerformAction(element_ref, action)
                 if error_code != 0:
                     raise QianfanAccessError(f"点击元素失败，错误码：{error_code}")
                 return
-            current_index += 1
+    raise QianfanAccessError(f"元素索引越界：{element_index}")
 
-        if depth >= AX_MAX_DEPTH or role in AX_SKIP_SUBTREE_ROLES:
-            continue
-        for child_ref in _copy_children(element_ref):
-            queue.append((child_ref, depth + 1))
 
+def set_front_window_element_value(element_index: int, value: str, app_name: str = CHROME_APP_NAME) -> None:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持设置 {CHROME_APP_NAME} 前台窗口元素，不支持：{app_name}")
+    window_ref = _front_window_reference(app_name)
+    target_value = _cf_string(value)
+    for element_ref, role, depth, current_index in _iter_interesting_window_elements(window_ref):
+        if role in AX_INTERESTING_ROLES and current_index is not None and current_index == element_index:
+            error_code = _APPLICATION_SERVICES.AXUIElementSetAttributeValue(
+                element_ref,
+                _cf_string("AXValue"),
+                target_value,
+            )
+            if error_code != 0:
+                raise QianfanAccessError(f"设置元素值失败，错误码：{error_code}")
+            return
     raise QianfanAccessError(f"元素索引越界：{element_index}")
 
 

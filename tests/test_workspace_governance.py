@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,50 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             size=(60, 20),
         )
         self.assertEqual(module.element_center(element), (130, 210))
+
+    def test_qianfan_access_runs_front_window_javascript_via_osascript(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module.subprocess, "run") as mocked_run:
+            mocked_run.return_value = subprocess.CompletedProcess(
+                args=["osascript"],
+                returncode=0,
+                stdout='{"ok":true}\n',
+                stderr="",
+            )
+            result = module.run_front_window_javascript("JSON.stringify({ok:true})")
+
+        self.assertEqual(result, '{"ok":true}')
+        command = mocked_run.call_args.args[0]
+        self.assertEqual(command[:3], ["osascript", "-l", "AppleScript"])
+        self.assertTrue(any("Google Chrome" in part for part in command))
+        self.assertIn("JSON.stringify({ok:true})", command)
+
+    def test_qianfan_access_focuses_window_by_url_via_osascript(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with mock.patch.object(module.subprocess, "run") as mocked_run:
+            mocked_run.return_value = subprocess.CompletedProcess(
+                args=["osascript"],
+                returncode=0,
+                stdout='https://ark.xiaohongshu.com/app-item/comment/analysis\n',
+                stderr="",
+            )
+            result = module.focus_window_by_url("app-item/comment/analysis")
+
+        self.assertEqual(result, "https://ark.xiaohongshu.com/app-item/comment/analysis")
+        command = mocked_run.call_args.args[0]
+        self.assertEqual(command[:3], ["osascript", "-l", "AppleScript"])
+        self.assertTrue(any("set index of currentWindow to 1" in part for part in command))
+        self.assertIn("app-item/comment/analysis", command)
 
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
         spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
@@ -519,6 +564,162 @@ print(json.dumps(payload, ensure_ascii=False))
             export_file.write_text("", encoding="utf-8")
             self.assertFalse(module.file_is_stable(export_file, stable_seconds=0.05))
 
+    def test_sync_review_status_export_store_prefers_ax(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="review-status-mode-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "today": "2026-05-31",
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "earliest_review_date": "2026-05-27",
+                                "records": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock()
+            args.plan_file = str(plan_file)
+            args.store = "抱树的koala小姐"
+            args.desktop_dir = str(root / "Desktop")
+            args.downloads_dir = str(root / "Downloads")
+            args.output_dir = str(root / "saved")
+            args.local_state_path = str(root / "Local State")
+            args.export_timeout_seconds = 120
+            args.interaction_mode = "auto"
+
+            profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+            expected = {"interaction_mode": "ax", "saved_file": "/tmp/export.csv"}
+            with (
+                mock.patch.object(module, "load_profiles", return_value=[profile]),
+                mock.patch.object(module, "resolve_profile", return_value=profile),
+                mock.patch.object(module, "export_store_via_ax", return_value=expected) as ax_mock,
+                mock.patch.object(module, "export_store_via_mouse") as mouse_mock,
+            ):
+                payload = module.export_store(args)
+
+        self.assertEqual(payload["interaction_mode"], "ax")
+        ax_mock.assert_called_once()
+        mouse_mock.assert_not_called()
+
+    def test_sync_review_status_export_store_falls_back_to_mouse(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="review-status-fallback-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "today": "2026-05-31",
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "earliest_review_date": "2026-05-27",
+                                "records": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock()
+            args.plan_file = str(plan_file)
+            args.store = "抱树的koala小姐"
+            args.desktop_dir = str(root / "Desktop")
+            args.downloads_dir = str(root / "Downloads")
+            args.output_dir = str(root / "saved")
+            args.local_state_path = str(root / "Local State")
+            args.export_timeout_seconds = 120
+            args.interaction_mode = "auto"
+
+            profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+            expected = {"interaction_mode": "mouse", "saved_file": "/tmp/export.csv"}
+            with (
+                mock.patch.object(module, "load_profiles", return_value=[profile]),
+                mock.patch.object(module, "resolve_profile", return_value=profile),
+                mock.patch.object(
+                    module,
+                    "export_store_via_ax",
+                    side_effect=module.ReviewSyncError("ax failed"),
+                ) as ax_mock,
+                mock.patch.object(module, "export_store_via_mouse", return_value=expected) as mouse_mock,
+            ):
+                payload = module.export_store(args)
+
+        self.assertEqual(payload["interaction_mode"], "mouse")
+        ax_mock.assert_called_once()
+        mouse_mock.assert_called_once()
+
+    def test_sync_review_status_export_store_supports_explicit_browser_js(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="review-status-browser-js-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "today": "2026-05-31",
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "earliest_review_date": "2026-05-27",
+                                "records": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock()
+            args.plan_file = str(plan_file)
+            args.store = "抱树的koala小姐"
+            args.desktop_dir = str(root / "Desktop")
+            args.downloads_dir = str(root / "Downloads")
+            args.output_dir = str(root / "saved")
+            args.local_state_path = str(root / "Local State")
+            args.export_timeout_seconds = 120
+            args.interaction_mode = "browser_js"
+
+            profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+            expected = {"interaction_mode": "browser_js", "saved_file": "/tmp/export.csv"}
+            with (
+                mock.patch.object(module, "load_profiles", return_value=[profile]),
+                mock.patch.object(module, "resolve_profile", return_value=profile),
+                mock.patch.object(module, "export_store_via_browser_js", return_value=expected) as browser_mock,
+                mock.patch.object(module, "export_store_via_ax") as ax_mock,
+                mock.patch.object(module, "export_store_via_mouse") as mouse_mock,
+            ):
+                payload = module.export_store(args)
+
+        self.assertEqual(payload["interaction_mode"], "browser_js")
+        browser_mock.assert_called_once()
+        ax_mock.assert_not_called()
+        mouse_mock.assert_not_called()
+
     def test_review_status_launch_scripts_pin_python_path(self) -> None:
         main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")
         check_script = (REPO_ROOT / "scripts" / "check_review_status_sync.sh").read_text(encoding="utf-8")
@@ -601,6 +802,59 @@ print(json.dumps(payload, ensure_ascii=False))
                 self.assertTrue(module.should_run_scheduled_retry("2026-05-30"))
             finally:
                 module.LATEST_STATUS_FILE = original
+
+    def test_run_review_status_save_status_separates_main_and_retry_files(self) -> None:
+        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="review-status-save-") as temp_dir:
+            runtime_dir = Path(temp_dir)
+            original_runtime_dir = module.RUNTIME_DIR
+            original_latest_status = module.LATEST_STATUS_FILE
+            original_latest_main_status = module.LATEST_MAIN_STATUS_FILE
+            original_latest_retry_status = module.LATEST_RETRY_STATUS_FILE
+            module.RUNTIME_DIR = runtime_dir
+            module.LATEST_STATUS_FILE = runtime_dir / "status_latest.json"
+            module.LATEST_MAIN_STATUS_FILE = runtime_dir / "status_latest_main.json"
+            module.LATEST_RETRY_STATUS_FILE = runtime_dir / "status_latest_retry.json"
+            try:
+                main_status = {
+                    "today": "2026-05-31",
+                    "mode": "main",
+                    "issues": [{"type": "store_failed", "store_name": "抱树的koala小姐", "message": "error"}],
+                }
+                retry_status = {
+                    "today": "2026-05-31",
+                    "mode": "retry",
+                    "issues": [{"type": "store_failed", "store_name": "抱树的koala小姐", "message": "retry error"}],
+                }
+
+                module.save_status(main_status)
+                module.save_status(retry_status)
+
+                self.assertTrue((runtime_dir / "status_2026-05-31_main.json").exists())
+                self.assertTrue((runtime_dir / "status_2026-05-31_retry.json").exists())
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest_main.json").read_text(encoding="utf-8"))["mode"],
+                    "main",
+                )
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest_retry.json").read_text(encoding="utf-8"))["mode"],
+                    "retry",
+                )
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest.json").read_text(encoding="utf-8"))["mode"],
+                    "retry",
+                )
+            finally:
+                module.RUNTIME_DIR = original_runtime_dir
+                module.LATEST_STATUS_FILE = original_latest_status
+                module.LATEST_MAIN_STATUS_FILE = original_latest_main_status
+                module.LATEST_RETRY_STATUS_FILE = original_latest_retry_status
 
     def test_sync_review_status_reconcile_updates_checkbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-reconcile-") as temp_dir:
