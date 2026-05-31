@@ -789,11 +789,10 @@ print(json.dumps(payload, ensure_ascii=False))
         }
         profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
         with (
-            mock.patch.object(module, "snapshot_window_ids", return_value={1, 2}),
+            mock.patch.object(module, "snapshot_window_ids_optional", return_value={1, 2}),
             mock.patch.object(module, "open_page"),
             mock.patch.object(module, "irregular_pause"),
             mock.patch.object(module, "wait_for_front_window", side_effect=[{"elements": []}, {"elements": []}]),
-            mock.patch.object(module, "detect_opened_window_id", return_value=88),
             mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
             mock.patch.object(module, "set_front_window_element_value"),
             mock.patch.object(module, "press_front_window_element"),
@@ -813,7 +812,7 @@ print(json.dumps(payload, ensure_ascii=False))
 
         self.assertEqual(payload["interaction_mode"], "ax")
         self.assertEqual(payload["saved_file"], "/tmp/export.csv")
-        close_mock.assert_called_once_with(88)
+        close_mock.assert_called_once_with({1, 2})
 
     def test_sync_review_status_safe_window_close_never_breaks_main_flow(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -823,17 +822,17 @@ print(json.dumps(payload, ensure_ascii=False))
         spec.loader.exec_module(module)
 
         with (
+            mock.patch.object(module, "snapshot_window_ids_optional", return_value={88}),
             mock.patch.object(module, "close_window_by_id", side_effect=module.ReviewSyncError("close failed")),
-            mock.patch.object(module, "front_window_active_url", side_effect=module.ReviewSyncError("front url failed")),
-            mock.patch.object(module, "close_window_by_url", side_effect=module.ReviewSyncError("url close failed")),
             mock.patch.object(module, "log_step") as log_mock,
         ):
-            module.close_opened_comment_window(88)
+            module.close_opened_comment_window(set())
 
         log_mock.assert_called()
         self.assertIn("收尾关闭失败", log_mock.call_args.args[0])
+        self.assertIn("仍残留窗口", log_mock.call_args.args[0])
 
-    def test_sync_review_status_safe_window_close_uses_ax_for_front_comment_page(self) -> None:
+    def test_sync_review_status_safe_window_close_skips_blind_close_without_snapshot(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -841,16 +840,30 @@ print(json.dumps(payload, ensure_ascii=False))
         spec.loader.exec_module(module)
 
         with (
-            mock.patch.object(module, "front_window_active_url", return_value=module.PAGE_URLS["comments"]),
-            mock.patch.object(module, "close_front_window_via_ax") as close_ax_mock,
-            mock.patch.object(module, "close_window_by_url") as close_url_mock,
+            mock.patch.object(module, "close_window_by_id") as close_id_mock,
             mock.patch.object(module, "log_step") as log_mock,
         ):
             module.close_opened_comment_window(None)
 
-        close_ax_mock.assert_called_once()
-        close_url_mock.assert_not_called()
-        self.assertTrue(any("AX 关闭前台任务窗口" in call.args[0] for call in log_mock.call_args_list))
+        close_id_mock.assert_not_called()
+        self.assertTrue(any("不做盲关" in call.args[0] for call in log_mock.call_args_list))
+
+    def test_sync_review_status_safe_window_close_closes_only_new_comment_windows(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module, "snapshot_window_ids_optional", side_effect=[{1, 2, 9}, {1, 2}]),
+            mock.patch.object(module, "close_window_by_id") as close_id_mock,
+            mock.patch.object(module, "log_step") as log_mock,
+        ):
+            module.close_opened_comment_window({1, 2})
+
+        close_id_mock.assert_called_once_with(9)
+        self.assertTrue(any("已关闭本轮任务窗口：9" in call.args[0] for call in log_mock.call_args_list))
 
     def test_review_status_launch_scripts_pin_python_path(self) -> None:
         main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")

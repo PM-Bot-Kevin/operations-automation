@@ -32,12 +32,9 @@ from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     ChromeUiElement,
     PAGE_URLS,
-    close_front_window_via_ax,
     close_window_by_id,
-    close_window_by_url,
     element_center,
     focus_window_by_url,
-    front_window_active_url,
     list_window_descriptors,
     load_profiles,
     open_page,
@@ -501,46 +498,41 @@ def snapshot_window_ids() -> set[int]:
         return set()
 
 
-def detect_opened_window_id(previous_window_ids: set[int], *, url_contains: str) -> int | None:
+def snapshot_window_ids_optional() -> set[int] | None:
     try:
         descriptors = list_window_descriptors()
     except Exception:
         return None
-    matching_new_ids = [
-        int(item["window_id"])
-        for item in descriptors
-        if url_contains in str(item.get("active_url", "")) and int(item["window_id"]) not in previous_window_ids
-    ]
-    if not matching_new_ids:
-        return None
-    return max(matching_new_ids)
+    return {int(item["window_id"]) for item in descriptors}
 
 
-def close_opened_comment_window(window_id: int | None) -> None:
+def close_opened_comment_window(previous_window_ids: set[int] | None) -> None:
     last_error: Exception | None = None
-    try:
-        if window_id is not None:
-            close_window_by_id(window_id)
-            log_step(f"已关闭本轮任务窗口：{window_id}")
-            return
-    except Exception as exc:
-        last_error = exc
+    remaining_new_ids: set[int] | None = None
+    if previous_window_ids is not None:
+        try:
+            current_window_ids = snapshot_window_ids_optional()
+            if current_window_ids is not None:
+                remaining_new_ids = current_window_ids - previous_window_ids
+                for window_id in sorted(remaining_new_ids, reverse=True):
+                    close_window_by_id(window_id)
+                    log_step(f"已关闭本轮任务窗口：{window_id}")
+                current_window_ids = snapshot_window_ids_optional()
+                if current_window_ids is not None:
+                    remaining_new_ids = current_window_ids - previous_window_ids
+                    if not remaining_new_ids:
+                        return
+        except Exception as exc:
+            last_error = exc
 
-    try:
-        current_url = front_window_active_url()
-        if PAGE_URLS["comments"] in current_url:
-            close_front_window_via_ax()
-            log_step("未拿到可用窗口 ID，已通过 AX 关闭前台任务窗口")
-            return
-    except Exception as exc:
-        last_error = exc
+    if previous_window_ids is None:
+        log_step("任务前窗口快照缺失，本轮不做盲关，避免误关用户原窗口")
+        return
 
-    try:
-        closed_url = close_window_by_url(PAGE_URLS["comments"], prefer_last=True)
-        log_step(f"未拿到可用窗口 ID，已按评价页 URL 尽力关闭任务窗口：{closed_url}")
-    except Exception as exc:
-        last_error = exc
-        log_step(f"任务窗口收尾关闭失败，忽略：{last_error}")
+    detail = ""
+    if remaining_new_ids:
+        detail = f"，仍残留窗口: {sorted(remaining_new_ids)}"
+    log_step(f"任务窗口收尾关闭失败，忽略：{last_error}{detail}")
 
 
 def locate_comment_page_controls(snapshot: dict[str, Any]) -> dict[str, ChromeUiElement]:
@@ -809,8 +801,7 @@ def export_store_via_browser_js(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids()
-    opened_window_id: int | None = None
+    previous_window_ids = snapshot_window_ids_optional()
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
@@ -822,7 +813,6 @@ def export_store_via_browser_js(
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
-        opened_window_id = detect_opened_window_id(previous_window_ids, url_contains=PAGE_URLS["comments"])
         log_step("评价页就绪，开始页内写入日期并搜索")
         fill_result = ensure_browser_js_ok(
             run_front_window_json(build_comment_page_fill_and_search_script(start_date, end_date)),
@@ -858,7 +848,7 @@ def export_store_via_browser_js(
             "saved_at": capture["saved_at"],
         }
     finally:
-        close_opened_comment_window(opened_window_id)
+        close_opened_comment_window(previous_window_ids)
 
 
 def export_store_via_mouse(
@@ -873,9 +863,8 @@ def export_store_via_mouse(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids()
+    previous_window_ids = snapshot_window_ids_optional()
     pyautogui = _load_pyautogui()
-    opened_window_id: int | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
@@ -886,7 +875,6 @@ def export_store_via_mouse(
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
-        opened_window_id = detect_opened_window_id(previous_window_ids, url_contains=PAGE_URLS["comments"])
         controls = locate_comment_page_controls(snapshot)
         log_step("定位评价页成功，开始低频填写日期")
 
@@ -933,7 +921,7 @@ def export_store_via_mouse(
             "saved_at": capture["saved_at"],
         }
     finally:
-        close_opened_comment_window(opened_window_id)
+        close_opened_comment_window(previous_window_ids)
 
 
 def export_store_via_ax(
@@ -948,8 +936,7 @@ def export_store_via_ax(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids()
-    opened_window_id: int | None = None
+    previous_window_ids = snapshot_window_ids_optional()
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
@@ -960,7 +947,6 @@ def export_store_via_ax(
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
-        opened_window_id = detect_opened_window_id(previous_window_ids, url_contains=PAGE_URLS["comments"])
         controls = locate_comment_page_controls(snapshot)
         log_step("定位评价页成功，开始 AX 填写日期")
         set_front_window_element_value(controls["start_date_field"].index, start_date)
@@ -1003,7 +989,7 @@ def export_store_via_ax(
             "saved_at": capture["saved_at"],
         }
     finally:
-        close_opened_comment_window(opened_window_id)
+        close_opened_comment_window(previous_window_ids)
 
 
 def wait_for_export_capture(
