@@ -613,6 +613,25 @@ print(json.dumps(payload, ensure_ascii=False))
             export_file.write_text("", encoding="utf-8")
             self.assertFalse(module.file_is_stable(export_file, stable_seconds=0.05))
 
+    def test_sync_review_status_wait_for_export_start_distinguishes_no_download_start(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module, "find_export_file", side_effect=module.ReviewSyncError("not found")),
+            mock.patch.object(module.time, "sleep"),
+        ):
+            with self.assertRaises(module.ExportStartTimeoutError):
+                module.wait_for_export_start(
+                    after_time=datetime(2026, 6, 1, 14, 0, 0),
+                    desktop_dir=Path("/tmp/Desktop"),
+                    downloads_dir=Path("/tmp/Downloads"),
+                    timeout_seconds=1,
+                )
+
     def test_sync_review_status_export_store_prefers_ax(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
         assert spec and spec.loader
@@ -661,6 +680,61 @@ print(json.dumps(payload, ensure_ascii=False))
 
         self.assertEqual(payload["interaction_mode"], "ax")
         ax_mock.assert_called_once()
+        mouse_mock.assert_not_called()
+
+    def test_sync_review_status_export_store_retries_ax_before_mouse_after_no_download_start(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="review-status-retry-ax-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "today": "2026-05-31",
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "earliest_review_date": "2026-05-27",
+                                "records": [],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            args = mock.Mock()
+            args.plan_file = str(plan_file)
+            args.store = "抱树的koala小姐"
+            args.desktop_dir = str(root / "Desktop")
+            args.downloads_dir = str(root / "Downloads")
+            args.output_dir = str(root / "saved")
+            args.local_state_path = str(root / "Local State")
+            args.export_start_timeout_seconds = 60
+            args.export_timeout_seconds = 120
+            args.interaction_mode = "auto"
+
+            profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+            expected = {"interaction_mode": "ax", "saved_file": "/tmp/export.csv"}
+            with (
+                mock.patch.object(module, "load_profiles", return_value=[profile]),
+                mock.patch.object(module, "resolve_profile", return_value=profile),
+                mock.patch.object(
+                    module,
+                    "export_store_via_ax",
+                    side_effect=[module.ExportStartTimeoutError("start timeout"), expected],
+                ) as ax_mock,
+                mock.patch.object(module, "export_store_via_mouse") as mouse_mock,
+            ):
+                payload = module.export_store(args)
+
+        self.assertEqual(payload["interaction_mode"], "ax")
+        self.assertEqual(ax_mock.call_count, 2)
         mouse_mock.assert_not_called()
 
     def test_sync_review_status_export_store_falls_back_to_mouse(self) -> None:
@@ -807,6 +881,7 @@ print(json.dumps(payload, ensure_ascii=False))
                 desktop_dir=Path("/tmp/Desktop"),
                 downloads_dir=Path("/tmp/Downloads"),
                 output_dir=Path("/tmp/saved"),
+                export_start_timeout_seconds=60,
                 export_timeout_seconds=120,
             )
 

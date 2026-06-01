@@ -63,9 +63,14 @@ KNOWN_LARK_CLI_PATHS = [
 ORDER_COLUMN_CANDIDATES = ("订单id", "订单ID", "订单号")
 DATE_TEXTFIELD_COMMIT_KEY = "tab"
 DEFAULT_EXPORT_INTERACTION_MODE = "auto"
+DEFAULT_EXPORT_START_TIMEOUT_SECONDS = 60
 
 
 class ReviewSyncError(RuntimeError):
+    pass
+
+
+class ExportStartTimeoutError(ReviewSyncError):
     pass
 
 
@@ -134,6 +139,7 @@ def parse_args() -> argparse.Namespace:
     export_parser.add_argument("--downloads-dir", default=str(DEFAULT_DOWNLOADS_DIR))
     export_parser.add_argument("--output-dir", default=str(DEFAULT_EXPORT_DIR))
     export_parser.add_argument("--local-state-path", default=str(DEFAULT_LOCAL_STATE_PATH))
+    export_parser.add_argument("--export-start-timeout-seconds", type=int, default=DEFAULT_EXPORT_START_TIMEOUT_SECONDS)
     export_parser.add_argument("--export-timeout-seconds", type=int, default=420)
     export_parser.add_argument(
         "--interaction-mode",
@@ -624,6 +630,24 @@ def file_is_stable(path: Path, *, stable_seconds: float = 2.5) -> bool:
     return second.st_size > 0 and first.st_size == second.st_size and int(first.st_mtime) == int(second.st_mtime)
 
 
+def wait_for_export_start(
+    *,
+    after_time: datetime,
+    desktop_dir: Path,
+    downloads_dir: Path,
+    timeout_seconds: int,
+) -> Path:
+    deadline = time.time() + max(timeout_seconds, 5)
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            return find_export_file(desktop_dir, downloads_dir, after_time)
+        except Exception as exc:
+            last_error = exc
+            time.sleep(2)
+    raise ExportStartTimeoutError(f"等待评价导出文件开始生成超时（{timeout_seconds} 秒）") from last_error
+
+
 def build_comment_page_poll_script() -> str:
     return """
 (function () {
@@ -798,6 +822,7 @@ def export_store_via_browser_js(
     desktop_dir: Path,
     downloads_dir: Path,
     output_dir: Path,
+    export_start_timeout_seconds: int,
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
@@ -833,6 +858,7 @@ def export_store_via_browser_js(
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
+            start_timeout_seconds=export_start_timeout_seconds,
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
@@ -860,6 +886,7 @@ def export_store_via_mouse(
     desktop_dir: Path,
     downloads_dir: Path,
     output_dir: Path,
+    export_start_timeout_seconds: int,
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
@@ -906,6 +933,7 @@ def export_store_via_mouse(
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
+            start_timeout_seconds=export_start_timeout_seconds,
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
@@ -933,6 +961,7 @@ def export_store_via_ax(
     desktop_dir: Path,
     downloads_dir: Path,
     output_dir: Path,
+    export_start_timeout_seconds: int,
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
@@ -974,6 +1003,7 @@ def export_store_via_ax(
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
+            start_timeout_seconds=export_start_timeout_seconds,
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
@@ -999,8 +1029,15 @@ def wait_for_export_capture(
     desktop_dir: Path,
     downloads_dir: Path,
     output_dir: Path,
+    start_timeout_seconds: int,
     timeout_seconds: int,
 ) -> dict[str, Any]:
+    wait_for_export_start(
+        after_time=after_time,
+        desktop_dir=desktop_dir,
+        downloads_dir=downloads_dir,
+        timeout_seconds=start_timeout_seconds,
+    )
     deadline = time.time() + max(timeout_seconds, 10)
     last_error: Exception | None = None
     while time.time() < deadline:
@@ -1021,7 +1058,7 @@ def wait_for_export_capture(
         except Exception as exc:
             last_error = exc
             time.sleep(2)
-    raise ReviewSyncError(f"等待评价导出文件超时（{timeout_seconds} 秒）") from last_error
+    raise ReviewSyncError(f"等待评价导出文件写完超时（{timeout_seconds} 秒）") from last_error
 
 
 def export_store(args: argparse.Namespace) -> dict[str, Any]:
@@ -1034,6 +1071,11 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
     profiles = load_profiles(local_state_path)
     profile = resolve_profile(profiles, store["store_name"])
     interaction_mode = getattr(args, "interaction_mode", DEFAULT_EXPORT_INTERACTION_MODE)
+    export_start_timeout_seconds = getattr(
+        args,
+        "export_start_timeout_seconds",
+        DEFAULT_EXPORT_START_TIMEOUT_SECONDS,
+    )
 
     if interaction_mode == "ax":
         return export_store_via_ax(
@@ -1044,6 +1086,7 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
+            export_start_timeout_seconds=export_start_timeout_seconds,
             export_timeout_seconds=args.export_timeout_seconds,
         )
 
@@ -1056,6 +1099,7 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
             desktop_dir=desktop_dir,
             downloads_dir=downloads_dir,
             output_dir=output_dir,
+            export_start_timeout_seconds=export_start_timeout_seconds,
             export_timeout_seconds=args.export_timeout_seconds,
         )
 
@@ -1069,20 +1113,38 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
                 desktop_dir=desktop_dir,
                 downloads_dir=downloads_dir,
                 output_dir=output_dir,
+                export_start_timeout_seconds=export_start_timeout_seconds,
                 export_timeout_seconds=args.export_timeout_seconds,
             )
+        except ExportStartTimeoutError as ax_exc:
+            log_step(f"AX 首轮未看到导出开始，重开页面后重试：{ax_exc}")
+            try:
+                return export_store_via_ax(
+                    store_name=store["store_name"],
+                    profile=profile,
+                    start_date=start_date,
+                    end_date=end_date,
+                    desktop_dir=desktop_dir,
+                    downloads_dir=downloads_dir,
+                    output_dir=output_dir,
+                    export_start_timeout_seconds=export_start_timeout_seconds,
+                    export_timeout_seconds=args.export_timeout_seconds,
+                )
+            except Exception as retry_exc:
+                log_step(f"AX 重开重试失败，切换鼠标兜底：{retry_exc}")
         except Exception as ax_exc:
             log_step(f"AX 失败，切换鼠标兜底：{ax_exc}")
-            return export_store_via_mouse(
-                store_name=store["store_name"],
-                profile=profile,
-                start_date=start_date,
-                end_date=end_date,
-                desktop_dir=desktop_dir,
-                downloads_dir=downloads_dir,
-                output_dir=output_dir,
-                export_timeout_seconds=args.export_timeout_seconds,
-            )
+        return export_store_via_mouse(
+            store_name=store["store_name"],
+            profile=profile,
+            start_date=start_date,
+            end_date=end_date,
+            desktop_dir=desktop_dir,
+            downloads_dir=downloads_dir,
+            output_dir=output_dir,
+            export_start_timeout_seconds=export_start_timeout_seconds,
+            export_timeout_seconds=args.export_timeout_seconds,
+        )
 
     if interaction_mode != "browser_js":
         raise ReviewSyncError(f"不支持的导出交互方式：{interaction_mode}")
@@ -1095,6 +1157,7 @@ def export_store(args: argparse.Namespace) -> dict[str, Any]:
         desktop_dir=desktop_dir,
         downloads_dir=downloads_dir,
         output_dir=output_dir,
+        export_start_timeout_seconds=export_start_timeout_seconds,
         export_timeout_seconds=args.export_timeout_seconds,
     )
 
