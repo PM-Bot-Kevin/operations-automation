@@ -123,6 +123,157 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertTrue(any("set index of currentWindow to 1" in part for part in command))
         self.assertIn("app-item/comment/analysis", command)
 
+    def test_qianfan_access_dismiss_script_prefers_safe_close_actions(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        script = module.build_dismiss_front_window_obstructions_script()
+        self.assertIn(".d-modal-close", script)
+        self.assertIn("取消", script)
+        self.assertIn("关闭", script)
+        self.assertIn("去参与", script)
+
+    def test_qianfan_access_wait_for_front_window_dismisses_overlay_and_allows_store_text_pool(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        snapshot = {
+            "pid": 52662,
+            "window_pointer": 12345,
+            "window_title": "商品-评价管理",
+            "active_url": module.PAGE_URLS["comments"],
+            "elements": [
+                module.ChromeUiElement(1, "AXTextField", "", "地址和搜索栏", module.PAGE_URLS["comments"], None, None),
+                module.ChromeUiElement(2, "AXStaticText", "", "", "抱树的koala小姐的店", None, None),
+                module.ChromeUiElement(3, "AXStaticText", "", "", "评价时间", None, None),
+                module.ChromeUiElement(4, "AXButton", "搜索", "", "", None, None),
+                module.ChromeUiElement(5, "AXButton", "全部导出", "", "", None, None),
+            ],
+        }
+
+        with (
+            mock.patch.object(module, "list_window_snapshots", side_effect=lambda *_args, **_kwargs: [snapshot]),
+            mock.patch.object(module, "raise_window"),
+            mock.patch.object(
+                module,
+                "dismiss_front_window_obstructions",
+                side_effect=lambda: (
+                    {"ok": True, "dismissed": True, "strategy": "close_icon"}
+                    if not hasattr(module, "_dismiss_called_once")
+                    else {"ok": True, "dismissed": False, "checked_root_count": 0}
+                ),
+            ) as dismiss_mock,
+            mock.patch.object(
+                module,
+                "dismiss_window_obstructions_via_ax",
+                return_value={"ok": True, "dismissed": False, "strategy": "ax_not_overlay_like"},
+            ),
+            mock.patch.object(module.time, "sleep"),
+        ):
+            if hasattr(module, "_dismiss_called_once"):
+                delattr(module, "_dismiss_called_once")
+            def wrapped_dismiss():
+                if not hasattr(module, "_dismiss_called_once"):
+                    module._dismiss_called_once = True
+                    return {"ok": True, "dismissed": True, "strategy": "close_icon"}
+                return {"ok": True, "dismissed": False, "checked_root_count": 0}
+            dismiss_mock.side_effect = wrapped_dismiss
+            result = module.wait_for_front_window(
+                title_contains="抱树的koala小姐",
+                url_contains=module.PAGE_URLS["comments"],
+                required_texts=("评价时间", "搜索", "全部导出"),
+                timeout_seconds=5,
+                poll_seconds=0.5,
+            )
+
+        self.assertEqual(result["window_title"], "商品-评价管理")
+        self.assertEqual(dismiss_mock.call_count, 2)
+
+    def test_qianfan_access_focus_window_by_url_ax_uses_matching_snapshot(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        target = {
+            "pid": 52662,
+            "window_pointer": 12345,
+            "window_title": "商品-评价管理",
+            "elements": [
+                module.ChromeUiElement(1, "AXTextField", "", "地址和搜索栏", module.PAGE_URLS["comments"], None, None),
+            ],
+        }
+        other = {
+            "pid": 42491,
+            "window_pointer": 67890,
+            "window_title": "localhost",
+            "elements": [
+                module.ChromeUiElement(2, "AXTextField", "", "地址和搜索栏", "http://localhost:3000/", None, None),
+            ],
+        }
+
+        with (
+            mock.patch.object(module, "list_window_snapshots", return_value=[other, target]),
+            mock.patch.object(module, "raise_window") as raise_mock,
+        ):
+            result = module.focus_window_by_url_ax(module.PAGE_URLS["comments"])
+
+        self.assertEqual(result["pid"], 52662)
+        raise_mock.assert_called_once_with(target)
+
+    def test_qianfan_access_wait_for_front_window_falls_back_to_ax_dismiss_when_js_unavailable(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        snapshot = {
+            "pid": 52662,
+            "window_pointer": 12345,
+            "window_title": "商品-评价管理",
+            "active_url": module.PAGE_URLS["comments"],
+            "elements": [
+                module.ChromeUiElement(1, "AXTextField", "", "地址和搜索栏", module.PAGE_URLS["comments"], None, None),
+                module.ChromeUiElement(2, "AXStaticText", "", "", "抱树的koala小姐的店", None, None),
+                module.ChromeUiElement(3, "AXStaticText", "", "", "评价时间", None, None),
+                module.ChromeUiElement(4, "AXButton", "搜索", "", "", None, None),
+                module.ChromeUiElement(5, "AXButton", "全部导出", "", "", None, None),
+            ],
+        }
+
+        with (
+            mock.patch.object(module, "list_window_snapshots", return_value=[snapshot]),
+            mock.patch.object(module, "raise_window"),
+            mock.patch.object(
+                module,
+                "dismiss_front_window_obstructions",
+                side_effect=module.QianfanAccessError("AppleScript JS unavailable"),
+            ),
+            mock.patch.object(
+                module,
+                "dismiss_window_obstructions_via_ax",
+                return_value={"ok": True, "dismissed": False, "strategy": "ax_not_overlay_like"},
+            ) as ax_dismiss_mock,
+        ):
+            result = module.wait_for_front_window(
+                title_contains="抱树的koala小姐",
+                url_contains=module.PAGE_URLS["comments"],
+                required_texts=("评价时间", "搜索", "全部导出"),
+                timeout_seconds=5,
+                poll_seconds=0.5,
+            )
+
+        self.assertEqual(result["pid"], 52662)
+        ax_dismiss_mock.assert_called_once()
+
     def test_qianfan_access_lists_and_closes_windows_safely(self) -> None:
         spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
         assert spec and spec.loader
@@ -866,6 +1017,7 @@ print(json.dumps(payload, ensure_ascii=False))
             mock.patch.object(module, "snapshot_window_ids_optional", return_value={1, 2}),
             mock.patch.object(module, "open_page"),
             mock.patch.object(module, "irregular_pause"),
+            mock.patch.object(module, "focus_comment_window_if_possible"),
             mock.patch.object(module, "wait_for_front_window", side_effect=[{"elements": []}, {"elements": []}]),
             mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
             mock.patch.object(module, "set_front_window_element_value"),

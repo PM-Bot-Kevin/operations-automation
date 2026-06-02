@@ -34,7 +34,7 @@ from xhs_qianfan_access import (
     PAGE_URLS,
     close_window_by_id,
     element_center,
-    focus_window_by_url,
+    focus_window_by_url_ax,
     list_window_descriptors,
     load_profiles,
     open_page,
@@ -813,6 +813,13 @@ def wait_for_comment_page_ready_via_browser_js(timeout_seconds: int = 30, poll_s
     raise ReviewSyncError("等待评价页搜索结果稳定超时。") from last_error
 
 
+def focus_comment_window_if_possible() -> None:
+    try:
+        focus_window_by_url_ax(PAGE_URLS["comments"])
+    except Exception as exc:
+        log_step(f"评价页聚焦未命中，继续等待页面就绪：{exc}")
+
+
 def export_store_via_browser_js(
     *,
     store_name: str,
@@ -831,7 +838,7 @@ def export_store_via_browser_js(
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
         irregular_pause(3.0, 6.0)
-        focus_window_by_url(PAGE_URLS["comments"])
+        focus_comment_window_if_possible()
         wait_for_front_window(
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
@@ -896,6 +903,7 @@ def export_store_via_mouse(
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
         irregular_pause(3.0, 6.0)
+        focus_comment_window_if_possible()
         snapshot = wait_for_front_window(
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
@@ -970,6 +978,7 @@ def export_store_via_ax(
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
         irregular_pause(3.0, 6.0)
+        focus_comment_window_if_possible()
         snapshot = wait_for_front_window(
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],

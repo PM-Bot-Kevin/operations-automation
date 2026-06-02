@@ -44,6 +44,51 @@ AX_INTERESTING_ROLES = {
     "AXWebArea",
 }
 AX_SKIP_SUBTREE_ROLES = {"AXImage"}
+SAFE_DISMISS_BUTTON_TEXTS = (
+    "关闭",
+    "取消",
+    "知道了",
+    "我知道了",
+    "稍后",
+    "暂不",
+    "跳过",
+    "以后再说",
+    "下次再说",
+    "继续浏览",
+    "继续逛逛",
+    "以后再参与",
+    "以后再看",
+    "不用了",
+    "不了",
+)
+UNSAFE_CONFIRM_BUTTON_TEXTS = (
+    "去参与",
+    "立即参与",
+    "马上参与",
+    "去开通",
+    "立即开通",
+    "去设置",
+    "确定",
+    "确认",
+    "提交",
+    "保存",
+    "领取",
+    "报名",
+    "参与",
+    "开通",
+)
+OVERLAY_HINT_TEXTS = (
+    "活动",
+    "计划",
+    "奖励",
+    "流量",
+    "弹窗",
+    "公告",
+    "提示",
+    "值得更多",
+)
+_PREFERRED_WINDOW_PID: int | None = None
+_PREFERRED_WINDOW_POINTER: int | None = None
 
 CFTypeRef = c_void_p
 CFStringRef = c_void_p
@@ -256,6 +301,176 @@ def run_front_window_javascript(script: str, app_name: str = CHROME_APP_NAME) ->
     )
 
 
+def build_dismiss_front_window_obstructions_script() -> str:
+    safe_texts = json.dumps(list(SAFE_DISMISS_BUTTON_TEXTS), ensure_ascii=False)
+    unsafe_texts = json.dumps(list(UNSAFE_CONFIRM_BUTTON_TEXTS), ensure_ascii=False)
+    return f"""
+(() => {{
+  const safeTexts = new Set({safe_texts}.map((item) => String(item || '').replace(/\\s+/g, '')));
+  const unsafeTexts = new Set({unsafe_texts}.map((item) => String(item || '').replace(/\\s+/g, '')));
+  function normalize(text) {{
+    return String(text || '').replace(/\\s+/g, '');
+  }}
+  function visible(node) {{
+    if (!node) {{
+      return false;
+    }}
+    const style = window.getComputedStyle(node);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') {{
+      return false;
+    }}
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }}
+  function isSafeLabel(text) {{
+    const normalized = normalize(text);
+    if (!normalized || unsafeTexts.has(normalized)) {{
+      return false;
+    }}
+    if (safeTexts.has(normalized)) {{
+      return true;
+    }}
+    for (const item of safeTexts) {{
+      if (item && normalized.includes(item)) {{
+        return true;
+      }}
+    }}
+    return false;
+  }}
+  function clickNode(node) {{
+    if (!node || typeof node.click !== 'function') {{
+      return false;
+    }}
+    node.dispatchEvent(new MouseEvent('mouseover', {{ bubbles: true, cancelable: true, view: window }}));
+    node.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+    node.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+    node.click();
+    return true;
+  }}
+  function collectRoots() {{
+    const selectors = [
+      '[role="dialog"]',
+      '[aria-modal="true"]',
+      '.d-modal-mask',
+      '.d-modal',
+      '.ant-modal-root',
+      '.ant-modal-wrap',
+      '.ant-modal',
+      '.semi-modal',
+      '.semi-portal',
+      '[class*="modal"]',
+      '[class*="dialog"]',
+      '[class*="popup"]',
+      '[class*="mask"]'
+    ];
+    const seen = new Set();
+    return Array.from(document.querySelectorAll(selectors.join(',')))
+      .filter((node) => node && node !== document.body && node !== document.documentElement && visible(node))
+      .filter((node) => {{
+        const key = node.outerHTML ? node.outerHTML.slice(0, 120) : String(node);
+        if (seen.has(key)) {{
+          return false;
+        }}
+        seen.add(key);
+        return true;
+      }})
+      .sort((left, right) => {{
+        const leftZ = Number(window.getComputedStyle(left).zIndex || 0) || 0;
+        const rightZ = Number(window.getComputedStyle(right).zIndex || 0) || 0;
+        return rightZ - leftZ;
+      }});
+  }}
+
+  const roots = collectRoots();
+  for (const root of roots) {{
+    const closeIcon = root.querySelector(
+      '.d-modal-close, .ant-modal-close, [aria-label*="关闭"], [title*="关闭"], [class*="close"]'
+    );
+    if (visible(closeIcon) && clickNode(closeIcon)) {{
+      return JSON.stringify({{ ok: true, dismissed: true, strategy: 'close_icon' }});
+    }}
+
+    const actions = Array.from(root.querySelectorAll('button, [role="button"], .d-clickable, [class*="close"]'));
+    for (const action of actions) {{
+      if (!visible(action)) {{
+        continue;
+      }}
+      const label = normalize(
+        action.innerText ||
+        action.textContent ||
+        action.getAttribute('aria-label') ||
+        action.getAttribute('title') ||
+        ''
+      );
+      if (isSafeLabel(label) && clickNode(action)) {{
+        return JSON.stringify({{ ok: true, dismissed: true, strategy: 'safe_button', label }});
+      }}
+    }}
+  }}
+  return JSON.stringify({{ ok: true, dismissed: false, checked_root_count: roots.length }});
+}})()
+""".strip()
+
+
+def dismiss_front_window_obstructions(app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
+    raw_output = run_front_window_javascript(build_dismiss_front_window_obstructions_script(), app_name=app_name)
+    try:
+        payload = json.loads(raw_output or "{}")
+    except json.JSONDecodeError as exc:
+        raise QianfanAccessError(f"无法解析前台页面蒙层处理结果：{raw_output[:200]}") from exc
+    if not payload.get("ok", False):
+        detail = str(payload.get("error", "")).strip() or "未知错误"
+        raise QianfanAccessError(f"处理前台页面蒙层失败：{detail}")
+    return payload
+
+
+def _normalize_action_label(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _window_snapshot_text_pool(snapshot: dict[str, Any]) -> str:
+    elements: list[ChromeUiElement] = snapshot["elements"]
+    return "\n".join(
+        part
+        for element in elements
+        for part in (element.title, element.description, element.value)
+        if part
+    )
+
+
+def dismiss_window_obstructions_via_ax(snapshot: dict[str, Any]) -> dict[str, Any]:
+    text_pool = _window_snapshot_text_pool(snapshot)
+    has_overlay_hint = any(keyword in text_pool for keyword in OVERLAY_HINT_TEXTS)
+    safe_buttons: list[ChromeUiElement] = []
+    unsafe_buttons: list[ChromeUiElement] = []
+
+    for element in snapshot["elements"]:
+        if element.role != "AXButton":
+            continue
+        label = _normalize_action_label(element.title or element.value)
+        if not label:
+            continue
+        if any(token in label for token in SAFE_DISMISS_BUTTON_TEXTS):
+            safe_buttons.append(element)
+        if any(token in label for token in UNSAFE_CONFIRM_BUTTON_TEXTS):
+            unsafe_buttons.append(element)
+
+    if not safe_buttons:
+        return {"ok": True, "dismissed": False, "strategy": "ax_no_safe_button"}
+    if not has_overlay_hint and not unsafe_buttons:
+        return {"ok": True, "dismissed": False, "strategy": "ax_not_overlay_like"}
+
+    target = safe_buttons[0]
+    raise_window(snapshot)
+    press_front_window_element(target.index)
+    return {
+        "ok": True,
+        "dismissed": True,
+        "strategy": "ax_safe_button",
+        "label": target.title or target.value,
+    }
+
+
 def close_front_window(app_name: str = CHROME_APP_NAME) -> None:
     if app_name != CHROME_APP_NAME:
         raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 前台窗口，不支持：{app_name}")
@@ -405,6 +620,26 @@ def focus_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME) -> s
     )
 
 
+def focus_window_by_url_ax(url_contains: str, app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
+    if not url_contains:
+        raise QianfanAccessError("聚焦窗口时 url_contains 不能为空。")
+    normalized_expected_url = url_contains.replace("https://", "").replace("http://", "")
+    for snapshot in list_window_snapshots(app_name):
+        elements: list[ChromeUiElement] = snapshot["elements"]
+        address_bars = [
+            element
+            for element in elements
+            if element.role == "AXTextField" and element.description == "地址和搜索栏"
+        ]
+        current_url = address_bars[0].value if address_bars else ""
+        normalized_current_url = current_url.replace("https://", "").replace("http://", "")
+        if normalized_expected_url and normalized_expected_url not in normalized_current_url:
+            continue
+        raise_window(snapshot)
+        return snapshot
+    raise QianfanAccessError("没有找到匹配目标地址的 Chrome 窗口")
+
+
 def _cf_string(text: str) -> CFStringRef:
     return _CORE_FOUNDATION.CFStringCreateWithCString(None, text.encode("utf-8"), CF_STRING_ENCODING_UTF8)
 
@@ -463,7 +698,19 @@ def _copy_point_like_attribute(element: AXUIElementRef, attribute_name: str) -> 
     return None
 
 
-def _find_chrome_pid(app_name: str) -> int:
+def _window_pointer(window_ref: AXUIElementRef | None) -> int:
+    if not window_ref:
+        return 0
+    return int(window_ref.value or 0)
+
+
+def _set_preferred_window(pid: int | None, window_pointer: int | None) -> None:
+    global _PREFERRED_WINDOW_PID, _PREFERRED_WINDOW_POINTER
+    _PREFERRED_WINDOW_PID = pid if pid and pid > 0 else None
+    _PREFERRED_WINDOW_POINTER = window_pointer if window_pointer and window_pointer > 0 else None
+
+
+def _find_chrome_pids(app_name: str) -> list[int]:
     completed = subprocess.run(
         ["pgrep", "-x", app_name],
         capture_output=True,
@@ -472,26 +719,134 @@ def _find_chrome_pid(app_name: str) -> int:
     )
     if completed.returncode != 0 or not completed.stdout.strip():
         raise QianfanAccessError(f"找不到应用：{app_name}")
+    pids: list[int] = []
     for raw_line in completed.stdout.splitlines():
         candidate = raw_line.strip()
         if candidate.isdigit():
-            return int(candidate)
+            pids.append(int(candidate))
+    if pids:
+        return pids
     raise QianfanAccessError(f"找不到应用进程号：{app_name}")
 
 
-def _front_window_reference(app_name: str) -> AXUIElementRef:
-    app_ref = _APPLICATION_SERVICES.AXUIElementCreateApplication(_find_chrome_pid(app_name))
+def _window_refs_for_pid(pid: int) -> list[AXUIElementRef]:
+    app_ref = _APPLICATION_SERVICES.AXUIElementCreateApplication(pid)
     if not app_ref:
-        raise QianfanAccessError(f"无法连接应用：{app_name}")
+        return []
+
+    windows: list[AXUIElementRef] = []
+    seen_pointers: set[int] = set()
 
     focused_window = _copy_attribute(app_ref, "AXFocusedWindow")
-    if focused_window:
-        return focused_window
+    focused_pointer = _window_pointer(focused_window)
+    if focused_pointer:
+        windows.append(focused_window)
+        seen_pointers.add(focused_pointer)
 
     raw_windows = _copy_attribute(app_ref, "AXWindows")
     if raw_windows and _CORE_FOUNDATION.CFArrayGetCount(raw_windows) > 0:
-        return c_void_p(_CORE_FOUNDATION.CFArrayGetValueAtIndex(raw_windows, 0))
+        for index in range(_CORE_FOUNDATION.CFArrayGetCount(raw_windows)):
+            window_ref = c_void_p(_CORE_FOUNDATION.CFArrayGetValueAtIndex(raw_windows, index))
+            pointer = _window_pointer(window_ref)
+            if not pointer or pointer in seen_pointers:
+                continue
+            windows.append(window_ref)
+            seen_pointers.add(pointer)
+    return windows
+
+
+def _front_window_reference(app_name: str) -> AXUIElementRef:
+    pids = _find_chrome_pids(app_name)
+
+    preferred_pid = _PREFERRED_WINDOW_PID
+    preferred_pointer = _PREFERRED_WINDOW_POINTER
+    ordered_pids = list(pids)
+    if preferred_pid in ordered_pids:
+        ordered_pids.remove(preferred_pid)
+        ordered_pids.insert(0, preferred_pid)
+
+    first_available_window: AXUIElementRef | None = None
+    for pid in ordered_pids:
+        window_refs = _window_refs_for_pid(pid)
+        if not window_refs:
+            continue
+        if first_available_window is None:
+            first_available_window = window_refs[0]
+        if preferred_pid == pid and preferred_pointer:
+            for window_ref in window_refs:
+                if _window_pointer(window_ref) == preferred_pointer:
+                    return window_ref
+        if preferred_pid == pid and preferred_pointer is None:
+            return window_refs[0]
+
+    if first_available_window is not None:
+        return first_available_window
     raise QianfanAccessError(f"应用没有可见窗口：{app_name}")
+
+
+def _window_snapshot_from_ref(pid: int, window_ref: AXUIElementRef, app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
+    window_title = _copy_text_attribute(window_ref, "AXTitle")
+    elements = _collect_window_elements(window_ref)
+    address_bars = [
+        element
+        for element in elements
+        if element.role == "AXTextField" and element.description == "地址和搜索栏"
+    ]
+    active_url = address_bars[0].value if address_bars else ""
+    return {
+        "app_name": app_name,
+        "pid": pid,
+        "window_pointer": _window_pointer(window_ref),
+        "window_title": window_title,
+        "active_url": active_url,
+        "elements": elements,
+    }
+
+
+def list_window_snapshots(app_name: str = CHROME_APP_NAME) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    preferred_pid = _PREFERRED_WINDOW_PID
+    pids = _find_chrome_pids(app_name)
+    ordered_pids = list(pids)
+    if preferred_pid in ordered_pids:
+        ordered_pids.remove(preferred_pid)
+        ordered_pids.insert(0, preferred_pid)
+
+    for pid in ordered_pids:
+        for window_ref in _window_refs_for_pid(pid):
+            snapshots.append(_window_snapshot_from_ref(pid, window_ref, app_name))
+    return snapshots
+
+
+def raise_window(snapshot: dict[str, Any]) -> None:
+    pid = int(snapshot.get("pid", 0) or 0)
+    pointer = int(snapshot.get("window_pointer", 0) or 0)
+    window_title = str(snapshot.get("window_title", "") or "")
+    active_url = str(snapshot.get("active_url", "") or "")
+    if pid <= 0 or pointer <= 0:
+        raise QianfanAccessError("缺少窗口定位信息，无法聚焦目标窗口。")
+    fallback_ref: AXUIElementRef | None = None
+    for window_ref in _window_refs_for_pid(pid):
+        if _window_pointer(window_ref) != pointer:
+            if fallback_ref is None:
+                candidate_snapshot = _window_snapshot_from_ref(pid, window_ref)
+                if candidate_snapshot["window_title"] == window_title and candidate_snapshot["active_url"] == active_url:
+                    fallback_ref = window_ref
+            continue
+        action = _cf_string("AXRaise")
+        error_code = _APPLICATION_SERVICES.AXUIElementPerformAction(window_ref, action)
+        if error_code != 0:
+            raise QianfanAccessError(f"聚焦目标窗口失败，错误码：{error_code}")
+        _set_preferred_window(pid, _window_pointer(window_ref))
+        return
+    if fallback_ref is not None:
+        action = _cf_string("AXRaise")
+        error_code = _APPLICATION_SERVICES.AXUIElementPerformAction(fallback_ref, action)
+        if error_code != 0:
+            raise QianfanAccessError(f"聚焦目标窗口失败，错误码：{error_code}")
+        _set_preferred_window(pid, _window_pointer(fallback_ref))
+        return
+    raise QianfanAccessError("目标窗口已不存在，无法聚焦。")
 
 
 def _iter_interesting_window_elements(window_ref: AXUIElementRef):
@@ -544,13 +899,12 @@ def _collect_window_elements(window_ref: AXUIElementRef) -> list[ChromeUiElement
 
 def capture_front_window_ui(app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
     window_ref = _front_window_reference(app_name)
-    window_title = _copy_text_attribute(window_ref, "AXTitle")
-    elements = _collect_window_elements(window_ref)
-    return {
-        "app_name": app_name,
-        "window_title": window_title,
-        "elements": elements,
-    }
+    target_pointer = _window_pointer(window_ref)
+    for pid in _find_chrome_pids(app_name):
+        for candidate_ref in _window_refs_for_pid(pid):
+            if _window_pointer(candidate_ref) == target_pointer:
+                return _window_snapshot_from_ref(pid, candidate_ref, app_name)
+    raise QianfanAccessError(f"应用没有可见窗口：{app_name}")
 
 
 def front_window_active_url(app_name: str = CHROME_APP_NAME) -> str:
@@ -584,38 +938,68 @@ def wait_for_front_window(
     required_texts: tuple[str, ...] = (),
     timeout_seconds: int = 30,
     poll_seconds: float = 1.5,
+    auto_dismiss_obstructions: bool = True,
 ) -> dict[str, Any]:
     deadline = time.time() + max(timeout_seconds, 5)
     last_error: Exception | None = None
     normalized_expected_url = url_contains.replace("https://", "").replace("http://", "")
     while time.time() < deadline:
         try:
-            snapshot = capture_front_window_ui()
-            window_title = snapshot["window_title"]
-            if title_contains and title_contains not in window_title:
-                raise QianfanAccessError(f"当前前台窗口不是目标店铺：{window_title}")
+            snapshots = list_window_snapshots(CHROME_APP_NAME)
+            if not snapshots:
+                raise QianfanAccessError(f"应用没有可见窗口：{app_name}")
 
-            elements: list[ChromeUiElement] = snapshot["elements"]
-            address_bars = [
-                element
-                for element in elements
-                if element.role == "AXTextField" and element.description == "地址和搜索栏"
-            ]
-            current_url = address_bars[0].value if address_bars else ""
-            normalized_current_url = current_url.replace("https://", "").replace("http://", "")
-            if normalized_expected_url and normalized_expected_url not in normalized_current_url:
-                raise QianfanAccessError(f"当前前台窗口不是目标页面：{current_url}")
+            best_url_mismatch = ""
+            best_store_mismatch = ""
+            best_missing = ""
 
-            text_pool = "\n".join(
-                part
-                for element in elements
-                for part in (element.title, element.description, element.value)
-                if part
-            )
-            missing = [text for text in required_texts if text not in text_pool]
-            if missing:
-                raise QianfanAccessError(f"页面关键控件还没出现：{', '.join(missing)}")
-            return snapshot
+            for snapshot in snapshots:
+                elements: list[ChromeUiElement] = snapshot["elements"]
+                address_bars = [
+                    element
+                    for element in elements
+                    if element.role == "AXTextField" and element.description == "地址和搜索栏"
+                ]
+                current_url = address_bars[0].value if address_bars else ""
+                normalized_current_url = current_url.replace("https://", "").replace("http://", "")
+                if normalized_expected_url and normalized_expected_url not in normalized_current_url:
+                    if current_url:
+                        best_url_mismatch = current_url
+                    continue
+
+                text_pool = _window_snapshot_text_pool(snapshot)
+                window_title = snapshot["window_title"]
+                if title_contains and title_contains not in window_title and title_contains not in text_pool:
+                    best_store_mismatch = window_title
+                    continue
+
+                raise_window(snapshot)
+                if auto_dismiss_obstructions:
+                    dismissed = False
+                    try:
+                        dismissal = dismiss_front_window_obstructions()
+                        dismissed = dismissal.get("dismissed", False)
+                    except QianfanAccessError:
+                        dismissed = False
+                    if not dismissed:
+                        dismissal = dismiss_window_obstructions_via_ax(snapshot)
+                        dismissed = dismissal.get("dismissed", False)
+                    if dismissed:
+                        time.sleep(min(max(poll_seconds / 2, 0.3), 1.0))
+                        break
+
+                missing = [text for text in required_texts if text not in text_pool]
+                if missing:
+                    best_missing = ", ".join(missing)
+                    continue
+                _set_preferred_window(int(snapshot["pid"]), int(snapshot["window_pointer"]))
+                return snapshot
+            else:
+                if best_missing:
+                    raise QianfanAccessError(f"页面关键控件还没出现：{best_missing}")
+                if best_store_mismatch:
+                    raise QianfanAccessError(f"当前前台窗口不是目标店铺：{best_store_mismatch}")
+                raise QianfanAccessError(f"当前前台窗口不是目标页面：{best_url_mismatch}")
         except Exception as exc:
             last_error = exc
             time.sleep(poll_seconds)

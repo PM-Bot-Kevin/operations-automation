@@ -18,7 +18,9 @@
     "tab_hopping_forbidden": true,
     "bulk_parallel_queries_forbidden": true,
     "direct_api_query_forbidden": true,
-    "prefer_same_page_session": true
+    "prefer_same_page_session": true,
+    "safe_overlay_close_allowed": true,
+    "overlay_positive_cta_forbidden": true
   },
   "abort_on": [
     "出现验证码、登录异常或权限异常",
