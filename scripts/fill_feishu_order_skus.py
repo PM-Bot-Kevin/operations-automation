@@ -372,10 +372,15 @@ def resolve_store_profile(
     store_name: str,
     profiles: list[ChromeProfile],
     overrides: dict[str, StoreProfileOverride],
+    allow_auto_match: bool = False,
 ) -> tuple[ChromeProfile, str]:
     override = overrides.get(store_name)
     if override is not None:
         return resolve_profile_via_override(profiles, override), "config"
+    if not allow_auto_match:
+        raise FillSkuError(
+            f"店铺“{store_name}”还没有写入正式 profile 配置：{DEFAULT_STORE_PROFILE_CONFIG_PATH}"
+        )
     return resolve_profile(profiles, store_name), "auto"
 
 
@@ -432,6 +437,22 @@ def wait_for_order_page(store_name: str) -> dict[str, Any]:
         required_texts=("订单管理", "查询"),
         timeout_seconds=35,
     )
+
+
+def ensure_order_page_window(store_name: str, profile: ChromeProfile) -> dict[str, Any]:
+    try:
+        return wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["orders"],
+            required_texts=("订单管理", "查询"),
+            timeout_seconds=5,
+            poll_seconds=0.8,
+        )
+    except Exception:
+        open_page(profile, "orders", dry_run=False)
+        irregular_pause(3.0, 6.0)
+        focus_order_window_if_possible()
+        return wait_for_order_page(store_name)
 
 
 def build_order_query_script(order_no: str) -> str:
@@ -621,6 +642,7 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
         store_name=store_name,
         profiles=profiles,
         overrides=store_profile_overrides,
+        allow_auto_match=False,
     )
     runtime_dir = Path(args.runtime_dir).expanduser().resolve()
     output_path, latest_output_path = build_order_query_runtime_paths(runtime_dir, store_name)
@@ -633,9 +655,7 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
     if not rounds:
         raise FillSkuError("计划里没有可执行轮次。")
 
-    open_page(profile, "orders", dry_run=False)
-    irregular_pause(3.0, 6.0)
-    focus_order_window_if_possible()
+    ensure_order_page_window(store_name, profile)
 
     updates: list[dict[str, str]] = []
     warnings: list[str] = []
@@ -736,6 +756,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
                         store_name=store_name,
                         profiles=profiles,
                         overrides=store_profile_overrides,
+                        allow_auto_match=False,
                     )
                     store_profiles[store_name] = resolved_profile
                     store_profile_sources[store_name] = match_source

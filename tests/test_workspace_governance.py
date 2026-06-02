@@ -675,6 +675,7 @@ print(json.dumps(payload, ensure_ascii=False))
                 mock.patch.object(fill_module, "open_page"),
                 mock.patch.object(fill_module, "irregular_pause"),
                 mock.patch.object(fill_module, "focus_order_window_if_possible"),
+                mock.patch.object(fill_module, "wait_for_front_window", return_value={"window_title": "订单查询"}),
                 mock.patch.object(fill_module, "wait_for_order_page"),
                 mock.patch.object(
                     fill_module,
@@ -691,6 +692,54 @@ print(json.dumps(payload, ensure_ascii=False))
             self.assertEqual(payload["updates"][0]["raw_spec_text"], "藏青色 常规 (165cm以下) M 100-120斤")
             self.assertEqual(payload["updates"][0]["normalized_spec_key"], "藏青色 常规 (165cm以下) M 100-120斤")
             self.assertTrue(payload["updates"][0]["normalization_matched"])
+
+    def test_fill_feishu_order_skus_prefers_existing_order_window_before_opening_new_one(self) -> None:
+        fill_spec = importlib.util.spec_from_file_location("fill_feishu_order_skus", FILL_SKUS_SCRIPT)
+        assert fill_spec and fill_spec.loader
+        fill_module = importlib.util.module_from_spec(fill_spec)
+        sys.modules[fill_spec.name] = fill_module
+        fill_spec.loader.exec_module(fill_module)
+
+        profile = fill_module.ChromeProfile(
+            directory="Profile 32",
+            name="抱树的koala小姐",
+            user_name="",
+            is_last_used=False,
+        )
+
+        with (
+            mock.patch.object(fill_module, "wait_for_front_window", return_value={"window_title": "订单查询"}) as wait_mock,
+            mock.patch.object(fill_module, "open_page") as open_mock,
+        ):
+            result = fill_module.ensure_order_page_window("抱树的koala小姐", profile)
+
+        self.assertEqual(result["window_title"], "订单查询")
+        wait_mock.assert_called_once()
+        open_mock.assert_not_called()
+
+    def test_fill_feishu_order_skus_requires_configured_store_profile(self) -> None:
+        fill_spec = importlib.util.spec_from_file_location("fill_feishu_order_skus", FILL_SKUS_SCRIPT)
+        assert fill_spec and fill_spec.loader
+        fill_module = importlib.util.module_from_spec(fill_spec)
+        sys.modules[fill_spec.name] = fill_module
+        fill_spec.loader.exec_module(fill_module)
+
+        profiles = [
+            fill_module.ChromeProfile(
+                directory="Profile 32",
+                name="抱树的koala小姐",
+                user_name="",
+                is_last_used=False,
+            )
+        ]
+
+        with self.assertRaises(fill_module.FillSkuError):
+            fill_module.resolve_store_profile(
+                store_name="抱树的koala小姐",
+                profiles=profiles,
+                overrides={},
+                allow_auto_match=False,
+            )
 
     def test_fill_feishu_order_skus_apply_writes_real_values_per_record(self) -> None:
         with tempfile.TemporaryDirectory(prefix="feishu-sku-apply-") as temp_dir:
