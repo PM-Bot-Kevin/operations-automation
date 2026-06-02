@@ -7,6 +7,11 @@
 - 当前工作区如果依赖其他工作区，只能连接对方正式入口
 - 涉及千帆后台的流程，默认必须保持只读、低频、最小操作；如果要查订单信息，优先按单店分批执行，并保持不规则停顿，不允许固定节奏高频查询
 - 涉及千帆后台的默认风控口径，以 `config/xhs_qianfan_guardrails.json` 和 `docs/xhs_qianfan_safety.md` 为准；后续所有千帆需求默认沿用这套极度保守规则
+- “好评表缺失 SKU 补齐”这条链路固定统一走订单查询页 `https://ark.xiaohongshu.com/app-order/order/query`，不同店铺只切 Chrome profile，不再按店铺拆不同页面
+- 这条 SKU 链路的店铺 profile 正式映射固定看 `config/xhs_order_query_profiles.json`；后续新增店铺优先补配置，不要改主流程
+- 这条 SKU 链路的规格标准化映射也固定收敛到 `config/xhs_order_query_profiles.json`；后续新增商品规格优先补配置，不要把映射散落到不同脚本
+- 这条 SKU 链路的正式交互主备固定为 `AX -> browser_js -> mouse`：`AX` 是长期主方案，`browser_js` 只是增强模式，鼠标只作最后兜底
+- 这条 SKU 链路的正式窗口绑定固定按“店铺 profile + 统一订单查询页 URL”重绑目标窗口，不依赖用户当前 tab
 - “好评表已上评同步”这条链路固定走评价管理页按日期导出，不走逐单订单搜索；默认 `14:00` 主跑，只有主跑失败时 `14:20` 才补跑，正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
 - 这条链路的正式交互主方案固定为：复用现有 Chrome 店铺资料打开评价页，再用 `AX` 无鼠标控件操作完成日期填写、搜索和“全部导出”；正常路径不抢鼠标
 - `browser_js` 仍保留在脚本里作为显式验证模式，但不再作为这条正式定时链路的默认主方案

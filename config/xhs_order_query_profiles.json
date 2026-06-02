@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "order_query_page_url": "https://ark.xiaohongshu.com/app-order/order/query",
+  "primary_interaction_mode": "ax",
+  "fallback_interaction_modes": [
+    "browser_js",
+    "mouse"
+  ],
+  "sku_normalization": {
+    "exact_mappings": {
+      "藏青色 常规 (165cm以下) M 100-120斤": "藏青-常规;M",
+      "藏青色 常规 (165cm以下) L 120-140斤": "藏青-常规;L",
+      "藏青色 常规 (165cm以下) S 80-100斤": "藏青-常规;S",
+      "白色 常规 (165cm以下) M 100-120斤": "白色-常规;M",
+      "白色 常规 (165cm以下) L 120-140斤": "白色-常规;L",
+      "白色 常规 (165cm以下) S 80-100斤": "白色-常规;S",
+      "白色 加长 (165cm以上) M 100-120斤": "白色-加长;M",
+      "白色 加长 (165cm以上) L 120-140斤": "白色-加长;L",
+      "白色 加长 (165cm以上) S 80-100斤": "白色-加长;S",
+      "藏青色 加长 (165cm以上) M 100-120斤": "藏青-加长;M",
+      "藏青色 加长 (165cm以上) L 120-140斤": "藏青-加长;L",
+      "藏青色 加长 (165cm以上) S 80-100斤": "藏青-加长;S"
+    }
+  },
+  "stores": []
+}

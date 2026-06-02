@@ -39,7 +39,12 @@ bash scripts/install_backup_launchagent.sh
 - 千帆相关需求的极度保守执行规则已经单独固化到 `config/xhs_qianfan_guardrails.json` 和 `docs/xhs_qianfan_safety.md`，后续默认直接复用，不要每次重新定策略。
 - 当前仓库还新增“飞书好评表缺失 SKU 补齐”能力，对应脚本是 `scripts/fill_feishu_order_skus.py`。
 - 正式流程固定分成两段：先 `plan` 拉出缺 SKU 订单和店铺资料映射，再由助手在千帆后台只读慢查真实完整规格，最后用 `apply` 回写飞书。
-- 这项能力写回飞书时，`SKU` 列口径固定按千帆后台查到的真实完整规格，不再改写成颜色简写。
+- 这条 SKU 链路统一走订单查询页 `https://ark.xiaohongshu.com/app-order/order/query`，不同店铺只切 Chrome profile，不再按店铺拆不同页面流程。
+- 店铺和 Chrome profile 的正式映射已经单独固化到 `config/xhs_order_query_profiles.json`；后续新增店铺优先补配置，不要继续往主脚本里堆店铺判断。
+- 真实规格写回前，默认先按 `config/xhs_order_query_profiles.json` 里的标准化映射转成正式 SKU；没命中映射时才保留原始规格，避免静默写错。
+- 这条 SKU 链路的正式交互主备固定为 `AX -> browser_js -> mouse`：`AX` 是长期主方案，`browser_js` 只是增强或验证，鼠标只作最后兜底。
+- 这条 SKU 链路的正式窗口绑定固定按“店铺 profile + 统一订单查询页 URL”重绑目标窗口，不依赖用户当前停留 tab。
+- 这项能力写回飞书时，`SKU` 列口径固定优先写标准化后的正式 SKU，同时保留原始规格查询结果用于审计和排查。
 - 这项能力的千帆侧执行必须继续遵守风控约束：只允许串行、单店分批、低频查询，搜索之间不能用固定时间间隔，必须保持不规则停顿。
 - 极度保守口径下，默认一轮不超过 5 单；一轮结束后必须停一下，再决定是否继续下一轮。
 - 由于 Chrome 正在使用中的真实资料会有锁，后续不要强行用独立自动化进程抢占同一套 live profile；优先复用用户当前浏览器会话和页面状态。

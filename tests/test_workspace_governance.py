@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -24,6 +25,8 @@ FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
 SYNC_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
+ORDER_PAGE_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_order_page.py"
+SKU_NORMALIZER_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_sku_normalizer.py"
 
 
 class WorkspaceGovernanceTests(unittest.TestCase):
@@ -494,6 +497,7 @@ print(json.dumps(payload, ensure_ascii=False))
             fake_cli.chmod(0o755)
 
             local_state = root / "Local State"
+            store_profile_config = root / "xhs_order_query_profiles.json"
             local_state.write_text(
                 json.dumps(
                     {
@@ -504,6 +508,31 @@ print(json.dumps(payload, ensure_ascii=False))
                                 "Profile 36": {"name": "考拉小姐慢慢来", "user_name": ""},
                             },
                         }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            store_profile_config.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "order_query_page_url": "https://ark.xiaohongshu.com/app-order/order/query",
+                        "primary_interaction_mode": "ax",
+                        "fallback_interaction_modes": ["browser_js", "mouse"],
+                        "sku_normalization": {
+                            "exact_mappings": {
+                                "藏青色 常规 (165cm以下) M 100-120斤": "藏青-常规;M"
+                            }
+                        },
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "profile_directory": "Profile 32",
+                                "profile_name": "抱树的koala小姐",
+                                "enabled": True,
+                            }
+                        ],
                     },
                     ensure_ascii=False,
                 ),
@@ -520,6 +549,8 @@ print(json.dumps(payload, ensure_ascii=False))
                     str(fake_cli),
                     "--local-state-path",
                     str(local_state),
+                    "--store-profile-config",
+                    str(store_profile_config),
                     "--format",
                     "json",
                 ],
@@ -533,11 +564,133 @@ print(json.dumps(payload, ensure_ascii=False))
             self.assertEqual(payload["summary"]["missing_sku_orders"], 3)
             self.assertEqual(payload["summary"]["stores_involved"], 2)
             self.assertEqual(payload["guardrails"]["max_orders_per_round"], 5)
+            self.assertEqual(
+                payload["order_query"]["page_url"],
+                "https://ark.xiaohongshu.com/app-order/order/query",
+            )
+            self.assertEqual(
+                payload["order_query"]["sku_normalization"]["strategy"],
+                "exact_mapping_then_fallback_raw_spec",
+            )
+            self.assertEqual(payload["order_query"]["sku_normalization"]["exact_mapping_count"], 1)
+            self.assertEqual(payload["execution_strategy"]["interaction_modes"], ["ax", "browser_js", "mouse"])
             self.assertEqual(payload["stores"][0]["store_name"], "抱树的koala小姐")
             self.assertEqual(payload["stores"][0]["profile"]["directory"], "Profile 32")
+            self.assertEqual(payload["stores"][0]["profile_match_source"], "config")
             self.assertEqual(payload["stores"][0]["suggested_rounds"], [["P1001", "P1002"]])
             self.assertEqual(payload["records"][0]["order_no"], "P1001")
+            self.assertEqual(payload["records"][0]["profile_match_source"], "config")
             self.assertTrue(any("P3001" in warning for warning in payload["warnings"]))
+
+    def test_fill_feishu_order_skus_query_normalizes_spec_and_keeps_raw(self) -> None:
+        fill_spec = importlib.util.spec_from_file_location("fill_feishu_order_skus", FILL_SKUS_SCRIPT)
+        assert fill_spec and fill_spec.loader
+        fill_module = importlib.util.module_from_spec(fill_spec)
+        sys.modules[fill_spec.name] = fill_module
+        fill_spec.loader.exec_module(fill_module)
+
+        with tempfile.TemporaryDirectory(prefix="feishu-sku-query-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            local_state = root / "Local State"
+            store_profile_config = root / "xhs_order_query_profiles.json"
+            runtime_dir = root / "runtime"
+
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Profile 32",
+                            "info_cache": {
+                                "Profile 32": {"name": "抱树的koala小姐", "user_name": ""},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            store_profile_config.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "order_query_page_url": "https://ark.xiaohongshu.com/app-order/order/query",
+                        "primary_interaction_mode": "ax",
+                        "fallback_interaction_modes": ["browser_js", "mouse"],
+                        "sku_normalization": {
+                            "exact_mappings": {
+                                "藏青色 常规 (165cm以下) M 100-120斤": "藏青-常规;M"
+                            }
+                        },
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "profile_directory": "Profile 32",
+                                "profile_name": "抱树的koala小姐",
+                                "enabled": True,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "order_query": {
+                            "store_profile_config_path": str(store_profile_config),
+                        },
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "suggested_rounds": [["P1001"]],
+                            }
+                        ],
+                        "records": [
+                            {
+                                "record_id": "rec1",
+                                "store_name": "抱树的koala小姐",
+                                "order_no": "P1001",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            args = SimpleNamespace(
+                plan_file=str(plan_file),
+                store="抱树的koala小姐",
+                interaction_mode="ax",
+                local_state_path=str(local_state),
+                runtime_dir=str(runtime_dir),
+                output="",
+                max_rounds=0,
+                max_orders=0,
+            )
+
+            with (
+                mock.patch.object(fill_module, "open_page"),
+                mock.patch.object(fill_module, "irregular_pause"),
+                mock.patch.object(fill_module, "focus_order_window_if_possible"),
+                mock.patch.object(fill_module, "wait_for_order_page"),
+                mock.patch.object(
+                    fill_module,
+                    "query_order_spec",
+                    return_value=("藏青色 常规 (165cm以下) M 100-120斤", "ax"),
+                ),
+            ):
+                payload = fill_module.query_store_orders(args)
+
+            self.assertEqual(payload["profile_directory"], "Profile 32")
+            self.assertEqual(payload["sku_normalization"]["exact_mapping_count"], 1)
+            self.assertEqual(len(payload["updates"]), 1)
+            self.assertEqual(payload["updates"][0]["sku_value"], "藏青-常规;M")
+            self.assertEqual(payload["updates"][0]["raw_spec_text"], "藏青色 常规 (165cm以下) M 100-120斤")
+            self.assertEqual(payload["updates"][0]["normalized_spec_key"], "藏青色 常规 (165cm以下) M 100-120斤")
+            self.assertTrue(payload["updates"][0]["normalization_matched"])
 
     def test_fill_feishu_order_skus_apply_writes_real_values_per_record(self) -> None:
         with tempfile.TemporaryDirectory(prefix="feishu-sku-apply-") as temp_dir:
@@ -609,6 +762,62 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
                     {"record_id": "rec2", "payload": {"SKU": "藏青色 加长 L"}},
                 ],
             )
+
+    def test_xhs_qianfan_order_page_locates_controls_and_extracts_matches(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_order_page", ORDER_PAGE_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        snapshot = {
+            "elements": [
+                SimpleNamespace(index=10, role="AXStaticText", title="快捷筛选", description="", value="", position=(390, 504), size=(56, 17)),
+                SimpleNamespace(index=11, role="AXTextField", title="", description="", value="", position=(426, 549), size=(796, 20)),
+                SimpleNamespace(index=12, role="AXButton", title="重置", description="", value="", position=(1536, 639), size=(60, 32)),
+                SimpleNamespace(index=13, role="AXButton", title="查询", description="", value="", position=(1604, 639), size=(60, 32)),
+                SimpleNamespace(index=14, role="AXStaticText", title="查询到 1 项", description="", value="", position=(390, 727), size=(72, 16)),
+                SimpleNamespace(index=15, role="AXStaticText", title="编号：", description="", value="", position=(442, 830), size=(36, 18)),
+                SimpleNamespace(index=16, role="AXStaticText", title="P795916966135128451", description="", value="", position=(478, 830), size=(128, 18)),
+                SimpleNamespace(index=17, role="AXStaticText", title="已发货未签收", description="", value="", position=(1074, 831), size=(73, 16)),
+                SimpleNamespace(index=18, role="AXStaticText", title="规格：藏青色 常规 (165cm以下) M 100-120斤", description="", value="", position=(724, 871), size=(238, 36)),
+            ]
+        }
+
+        controls = module.locate_order_page_controls(snapshot)
+        self.assertEqual(controls.search_field_index, 11)
+        self.assertEqual(controls.query_button_index, 13)
+        self.assertEqual(controls.reset_button_index, 12)
+        self.assertEqual(module.extract_result_count(snapshot), 1)
+        self.assertEqual(module.find_order_spec(snapshot, "P795916966135128451"), "藏青色 常规 (165cm以下) M 100-120斤")
+        matches = module.extract_order_page_matches(snapshot)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].status_text, "已发货未签收")
+
+    def test_xhs_qianfan_sku_normalizer_uses_exact_mapping_then_fallback(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_sku_normalizer", SKU_NORMALIZER_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        exact_mapping = module.build_exact_mapping(
+            {
+                "sku_normalization": {
+                    "exact_mappings": {
+                        "藏青色 常规 (165cm以下) M 100-120斤": "藏青-常规;M",
+                    }
+                }
+            }
+        )
+        matched = module.normalize_sku_value("藏青色  常规 (165cm以下) M 100-120斤", exact_mapping)
+        fallback = module.normalize_sku_value("未知规格", exact_mapping)
+
+        self.assertEqual(exact_mapping["藏青色 常规 (165cm以下) M 100-120斤"], "藏青-常规;M")
+        self.assertEqual(matched.sku_value, "藏青-常规;M")
+        self.assertTrue(matched.matched)
+        self.assertEqual(fallback.sku_value, "未知规格")
+        self.assertFalse(fallback.matched)
 
     def test_sync_review_status_plan_groups_overdue_unchecked_records(self) -> None:
         with tempfile.TemporaryDirectory(prefix="review-status-plan-") as temp_dir:
@@ -1365,9 +1574,16 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
         )
         self.assertEqual(config["cross_workspace"]["dependencies"], [])
         guardrails = json.loads(QIANFAN_GUARDRAILS_PATH.read_text(encoding="utf-8"))
+        store_profile_config = json.loads((REPO_ROOT / "config" / "xhs_order_query_profiles.json").read_text(encoding="utf-8"))
         self.assertEqual(guardrails["execution_defaults"]["max_orders_per_round"], 5)
         self.assertTrue(guardrails["execution_defaults"]["single_store_only"])
         self.assertTrue(guardrails["execution_defaults"]["fixed_interval_forbidden"])
+        self.assertEqual(store_profile_config["primary_interaction_mode"], "ax")
+        self.assertEqual(store_profile_config["fallback_interaction_modes"], ["browser_js", "mouse"])
+        self.assertEqual(
+            store_profile_config["order_query_page_url"],
+            "https://ark.xiaohongshu.com/app-order/order/query",
+        )
 
         for path, fragment in [
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),
@@ -1378,6 +1594,9 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "搜索之间不能使用固定时间间隔"),
             (REPO_ROOT / "README.md", "真实完整规格"),
             (REPO_ROOT / "README.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "README.md", "xhs_order_query_profiles.json"),
+            (REPO_ROOT / "README.md", "AX -> browser_js -> mouse"),
+            (REPO_ROOT / "README.md", "app-order/order/query"),
             (REPO_ROOT / "README.md", "已上评"),
             (REPO_ROOT / "README.md", "14:00"),
             (REPO_ROOT / "README.md", "14:20"),
@@ -1393,6 +1612,9 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "fill_feishu_order_skus.py"),
             (REPO_ROOT / "AGENTS.md", "不能使用固定时间间隔"),
             (REPO_ROOT / "AGENTS.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "AGENTS.md", "xhs_order_query_profiles.json"),
+            (REPO_ROOT / "AGENTS.md", "AX -> browser_js -> mouse"),
+            (REPO_ROOT / "AGENTS.md", "app-order/order/query"),
             (REPO_ROOT / "AGENTS.md", "sync_feishu_review_status.py"),
             (REPO_ROOT / "AGENTS.md", "14:00 主跑"),
             (REPO_ROOT / "AGENTS.md", "14:20"),
@@ -1406,6 +1628,9 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "真实完整规格"),
             (REPO_ROOT / "HANDOVER.md", "不能用固定时间间隔"),
             (REPO_ROOT / "HANDOVER.md", "默认一轮不超过 5 单"),
+            (REPO_ROOT / "HANDOVER.md", "xhs_order_query_profiles.json"),
+            (REPO_ROOT / "HANDOVER.md", "AX -> browser_js -> mouse"),
+            (REPO_ROOT / "HANDOVER.md", "app-order/order/query"),
             (REPO_ROOT / "HANDOVER.md", "14:00 主跑"),
             (REPO_ROOT / "HANDOVER.md", "14:20"),
             (REPO_ROOT / "HANDOVER.md", "补跑"),
@@ -1413,6 +1638,9 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_order_query_profiles.json"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "AX -> browser_js -> mouse"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "app-order/order/query"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "14:20"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "自动删除本轮评价导出临时文件"),

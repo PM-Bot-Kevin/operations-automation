@@ -49,6 +49,10 @@
       "path": "config/xhs_qianfan_guardrails.json"
     },
     {
+      "label": "订单查询页店铺 profile 配置",
+      "path": "config/xhs_order_query_profiles.json"
+    },
+    {
       "label": "千帆风控文档",
       "path": "docs/xhs_qianfan_safety.md"
     },

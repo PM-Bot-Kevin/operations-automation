@@ -44,6 +44,11 @@
 - 涉及千帆后台时，必须遵守“最小操作”原则：优先复用现有页面状态，避免无意义刷新、重复点击、来回切页、批量展开、连续重试等高频机械化操作，尽量把交互压到完成任务所需的最少步骤，以降低风控风险。
 - 涉及千帆后台的默认风控规则，以 `config/xhs_qianfan_guardrails.json` 和 `docs/xhs_qianfan_safety.md` 为准；后续所有千帆需求都默认复用这套规则，不要每次重新拍脑袋定节奏。
 - 以后用户如果表达的是“补齐好评表里的订单 SKU / 规格”，默认都应理解为：先用 `scripts/fill_feishu_order_skus.py plan` 整理缺失订单和店铺，再以只读方式去千帆后台逐单慢查真实完整规格，最后再用 `scripts/fill_feishu_order_skus.py apply` 回写飞书。
+- 这条 SKU 链路默认统一走订单查询页 `https://ark.xiaohongshu.com/app-order/order/query`，店铺差异只体现在 Chrome profile，不再按店铺拆不同页面方案。
+- 店铺和 Chrome profile 的正式映射固定看 `config/xhs_order_query_profiles.json`；后续新增店铺优先补配置，不要在脚本里硬编码店铺分支。
+- 千帆后台查到的原始规格，默认先按 `config/xhs_order_query_profiles.json` 里的标准化映射转成正式 SKU；没命中映射时才保留原始规格，避免静默写错。
+- 这条 SKU 链路的正式交互主备固定为 `AX -> browser_js -> mouse`：`AX` 是长期主方案，`browser_js` 只能算增强能力，鼠标只作最后兜底。
+- 这条 SKU 链路的正式窗口绑定固定按“店铺 profile + 订单查询页 URL”重绑目标窗口，不依赖用户当前已经停在哪个 tab。
 - 这类 SKU 查询任务默认只允许串行、单店分批、低频执行；搜索之间不能使用固定时间间隔，必须保持不规则停顿，避免形成明显的机器节奏。
 - 极度保守口径下，默认一轮不超过 5 单；一轮结束后必须停一下，再决定是否继续下一轮。
 - 以后用户如果表达的是“同步已上评 / 把好评表里的已上评勾上 / 检查哪些已经上评了”，默认都应理解为：先用 `scripts/sync_feishu_review_status.py plan` 整理“上评日期早于今天且未勾选”的记录，再按店铺去千帆评价管理页做日期范围导出，最后用 `scripts/sync_feishu_review_status.py reconcile --apply` 按导出结果回写飞书 `已上评`。

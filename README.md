@@ -154,7 +154,12 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 
 - `plan` 只负责整理缺失 SKU 的订单和店铺资料映射，不会写飞书，也不会修改千帆后台
 - `apply` 只负责把已经确认好的真实规格写回飞书，不会碰千帆后台
-- 当前 `SKU` 列以千帆后台查到的真实完整规格为准，不再做颜色简写
+- SKU 正式查询页固定统一走 `https://ark.xiaohongshu.com/app-order/order/query`，不同店铺只切 Chrome profile，不再为每个店铺单独维护一套页面流程
+- 店铺到 Chrome profile 的正式映射固定收敛到 `config/xhs_order_query_profiles.json`；后续新增店铺优先加配置，不要重写主流程
+- 千帆后台查到的原始规格，会先按 `config/xhs_order_query_profiles.json` 里的标准化映射转成正式 SKU；没命中映射时才保留原始规格回写
+- 这条链路的正式交互主备固定为 `AX -> browser_js -> mouse`，其中 `AX` 是长期主方案，`browser_js` 只作增强或验证，鼠标仅作最后兜底
+- 正式窗口绑定固定按“店铺 profile + 统一订单查询页 URL”重绑目标窗口，不依赖用户刚好停留在正确 tab
+- 当前 `SKU` 列正式口径优先写标准化后的 SKU，同时保留查询结果里的原始规格文本用于审计和排查
 - 涉及千帆后台查询时，默认只允许串行、单店分批、低频执行
 - 极度保守口径下，默认一轮不超过 5 单；一轮结束后必须停一下，再决定是否继续下一轮
 - 搜索之间不能使用固定时间间隔，必须保持不规则停顿，避免形成明显的机器节奏
