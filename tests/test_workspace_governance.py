@@ -1307,15 +1307,12 @@ print(json.dumps(payload, ensure_ascii=False))
         spec.loader.exec_module(module)
 
         with (
-            mock.patch.object(module, "snapshot_window_ids_optional", return_value={88}),
-            mock.patch.object(module, "close_window_by_id", side_effect=module.ReviewSyncError("close failed")),
-            mock.patch.object(module, "log_step") as log_mock,
+            mock.patch.object(module, "close_new_windows_for_url", return_value={"ok": False}) as close_mock,
         ):
             module.close_opened_comment_window(set())
 
-        log_mock.assert_called()
-        self.assertIn("收尾关闭失败", log_mock.call_args.args[0])
-        self.assertIn("仍残留窗口", log_mock.call_args.args[0])
+        close_mock.assert_called_once()
+        self.assertEqual(close_mock.call_args.kwargs["target_url_contains"], module.PAGE_URLS["comments"])
 
     def test_sync_review_status_safe_window_close_skips_blind_close_without_snapshot(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -1325,13 +1322,12 @@ print(json.dumps(payload, ensure_ascii=False))
         spec.loader.exec_module(module)
 
         with (
-            mock.patch.object(module, "close_window_by_id") as close_id_mock,
-            mock.patch.object(module, "log_step") as log_mock,
+            mock.patch.object(module, "close_new_windows_for_url", return_value={"ok": False, "skipped": True}) as close_mock,
         ):
             module.close_opened_comment_window(None)
 
-        close_id_mock.assert_not_called()
-        self.assertTrue(any("不做盲关" in call.args[0] for call in log_mock.call_args_list))
+        close_mock.assert_called_once()
+        self.assertIsNone(close_mock.call_args.args[0])
 
     def test_sync_review_status_safe_window_close_closes_only_new_comment_windows(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -1341,14 +1337,75 @@ print(json.dumps(payload, ensure_ascii=False))
         spec.loader.exec_module(module)
 
         with (
-            mock.patch.object(module, "snapshot_window_ids_optional", side_effect=[{1, 2, 9}, {1, 2}]),
-            mock.patch.object(module, "close_window_by_id") as close_id_mock,
-            mock.patch.object(module, "log_step") as log_mock,
+            mock.patch.object(
+                module,
+                "close_new_windows_for_url",
+                return_value={"ok": True, "closed_window_ids": [9], "remaining_window_ids": []},
+            ) as close_mock,
         ):
             module.close_opened_comment_window({1, 2})
 
-        close_id_mock.assert_called_once_with(9)
-        self.assertTrue(any("已关闭本轮任务窗口：9" in call.args[0] for call in log_mock.call_args_list))
+        close_mock.assert_called_once()
+        self.assertEqual(close_mock.call_args.args[0], {1, 2})
+
+    def test_qianfan_access_close_new_windows_for_url_closes_only_new_target_windows(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        logs: list[str] = []
+        with (
+            mock.patch.object(
+                module,
+                "list_window_descriptors",
+                side_effect=[
+                    [
+                        {"window_id": 1, "active_url": "https://example.com"},
+                        {"window_id": 2, "active_url": module.PAGE_URLS["comments"]},
+                        {"window_id": 3, "active_url": module.PAGE_URLS["comments"]},
+                        {"window_id": 4, "active_url": module.PAGE_URLS["orders"]},
+                    ],
+                    [
+                        {"window_id": 1, "active_url": "https://example.com"},
+                        {"window_id": 2, "active_url": module.PAGE_URLS["comments"]},
+                        {"window_id": 4, "active_url": module.PAGE_URLS["orders"]},
+                    ],
+                ],
+            ),
+            mock.patch.object(module, "close_window_by_id") as close_mock,
+        ):
+            result = module.close_new_windows_for_url(
+                {1, 2},
+                target_url_contains=module.PAGE_URLS["comments"],
+                log_step=logs.append,
+            )
+
+        close_mock.assert_called_once_with(3, app_name=module.CHROME_APP_NAME)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["closed_window_ids"], [3])
+        self.assertFalse(result["remaining_window_ids"])
+        self.assertTrue(any("已关闭本轮任务窗口：3" in item for item in logs))
+
+    def test_qianfan_access_close_new_windows_for_url_skips_blind_close_without_snapshot(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        logs: list[str] = []
+        with mock.patch.object(module, "close_window_by_id") as close_mock:
+            result = module.close_new_windows_for_url(
+                None,
+                target_url_contains=module.PAGE_URLS["orders"],
+                log_step=logs.append,
+            )
+
+        close_mock.assert_not_called()
+        self.assertTrue(result["skipped"])
+        self.assertTrue(any("不做盲关" in item for item in logs))
 
     def test_review_status_launch_scripts_pin_python_path(self) -> None:
         main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")
@@ -1652,6 +1709,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "README.md", "自动删除"),
             (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
+            (REPO_ROOT / "README.md", "默认决策顺序固定是：`云端正式站 -> 本机正式站 -> 本机权限例外站`"),
+            (REPO_ROOT / "README.md", "必须先得到用户明确确认，才允许新增第 4 类长期方案"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
@@ -1670,6 +1729,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "AGENTS.md", "删掉本轮评价导出临时文件"),
             (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
+            (REPO_ROOT / "AGENTS.md", "默认先按“站点分型”决定长期运行方案"),
+            (REPO_ROOT / "AGENTS.md", "云端正式站 -> 本机正式站 -> 本机权限例外站"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
             (REPO_ROOT / "HANDOVER.md", "默认优先复用用户现有的 Chrome 店铺资料"),
@@ -1686,6 +1747,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "run_review_status_sync.py"),
             (REPO_ROOT / "HANDOVER.md", "自动删除本轮评价导出临时文件"),
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
+            (REPO_ROOT / "HANDOVER.md", "默认固定先按 `云端正式站 -> 本机正式站 -> 本机权限例外站` 评估"),
+            (REPO_ROOT / "HANDOVER.md", "必须同时补自动恢复方案"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_order_query_profiles.json"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "AX -> browser_js -> mouse"),
@@ -1693,6 +1756,10 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "docs/workspace_maintenance.md", "install_review_status_launchagent.sh"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "14:20"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "自动删除本轮评价导出临时文件"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "默认优先按 3 类长期方案评估"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "正式运行统一走“正式版本目录 + 本机自动恢复守护”"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "用户会话拉起 + 轻量 watchdog"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "不允许偷偷把新网站做成第 4 套、第 5 套长期运行方案"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "固定节奏连续查询"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "先在飞书或别的外部表里把目标订单缩小到最少"),

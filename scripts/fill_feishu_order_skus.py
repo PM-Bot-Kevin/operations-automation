@@ -24,15 +24,14 @@ from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     PAGE_URLS,
     ChromeProfile,
-    capture_front_window_ui,
-    close_front_window_via_ax,
+    close_new_windows_for_url,
     element_center,
     focus_window_by_url_ax,
     load_profiles,
     open_page,
     press_front_window_element,
-    resolve_profile,
     run_front_window_javascript,
+    snapshot_window_ids_optional,
     set_front_window_element_value,
     wait_for_front_window,
 )
@@ -60,6 +59,10 @@ FILL_ACTION_KEYWORDS = ("补", "填", "回写", "更新", "同步", "查", "查�
 
 class FillSkuError(RuntimeError):
     pass
+
+
+def log_step(message: str) -> None:
+    print(f"[fill-sku] {message}", file=sys.stderr, flush=True)
 
 
 @dataclass(frozen=True)
@@ -655,57 +658,65 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
     if not rounds:
         raise FillSkuError("计划里没有可执行轮次。")
 
-    ensure_order_page_window(store_name, profile)
+    previous_window_ids = snapshot_window_ids_optional()
+    try:
+        ensure_order_page_window(store_name, profile)
 
-    updates: list[dict[str, str]] = []
-    warnings: list[str] = []
-    processed_orders = 0
-    for round_index, round_orders in enumerate(rounds, start=1):
-        if args.max_orders > 0 and processed_orders >= args.max_orders:
-            break
-        wait_for_order_page(store_name)
-        for order_no in round_orders:
+        updates: list[dict[str, str]] = []
+        warnings: list[str] = []
+        processed_orders = 0
+        for round_index, round_orders in enumerate(rounds, start=1):
             if args.max_orders > 0 and processed_orders >= args.max_orders:
                 break
-            record = record_by_order.get(order_no)
-            if not record:
-                warnings.append(f"计划里找不到订单 {order_no} 的 record_id，已跳过。")
-                continue
-            spec_text, used_mode = query_order_spec(order_no, store_name, args.interaction_mode)
-            normalized = normalize_sku_value(spec_text, sku_exact_mapping)
-            updates.append(
-                {
-                    "record_id": str(record["record_id"]),
-                    "order_no": order_no,
-                    "store_name": store_name,
-                    "sku_value": normalized.sku_value,
-                    "raw_spec_text": normalized.raw_spec_text,
-                    "normalized_spec_key": normalized.normalized_key,
-                    "normalization_matched": normalized.matched,
-                    "interaction_mode": used_mode,
-                }
-            )
-            processed_orders += 1
-            irregular_pause(2.5, 5.5)
-        if round_index < len(rounds) and (args.max_orders <= 0 or processed_orders < args.max_orders):
-            irregular_pause(15.0, 28.0)
+            wait_for_order_page(store_name)
+            for order_no in round_orders:
+                if args.max_orders > 0 and processed_orders >= args.max_orders:
+                    break
+                record = record_by_order.get(order_no)
+                if not record:
+                    warnings.append(f"计划里找不到订单 {order_no} 的 record_id，已跳过。")
+                    continue
+                spec_text, used_mode = query_order_spec(order_no, store_name, args.interaction_mode)
+                normalized = normalize_sku_value(spec_text, sku_exact_mapping)
+                updates.append(
+                    {
+                        "record_id": str(record["record_id"]),
+                        "order_no": order_no,
+                        "store_name": store_name,
+                        "sku_value": normalized.sku_value,
+                        "raw_spec_text": normalized.raw_spec_text,
+                        "normalized_spec_key": normalized.normalized_key,
+                        "normalization_matched": normalized.matched,
+                        "interaction_mode": used_mode,
+                    }
+                )
+                processed_orders += 1
+                irregular_pause(2.5, 5.5)
+            if round_index < len(rounds) and (args.max_orders <= 0 or processed_orders < args.max_orders):
+                irregular_pause(15.0, 28.0)
 
-    payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "plan_file": str(plan_path),
-        "store_name": store_name,
-        "profile_directory": profile.directory,
-        "sku_normalization": {
-            "exact_mapping_count": len(sku_exact_mapping),
-        },
-        "updates": updates,
-        "warnings": warnings,
-    }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    output_path.write_text(text, encoding="utf-8")
-    latest_output_path.write_text(text, encoding="utf-8")
-    return payload
+        payload = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "plan_file": str(plan_path),
+            "store_name": store_name,
+            "profile_directory": profile.directory,
+            "sku_normalization": {
+                "exact_mapping_count": len(sku_exact_mapping),
+            },
+            "updates": updates,
+            "warnings": warnings,
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        output_path.write_text(text, encoding="utf-8")
+        latest_output_path.write_text(text, encoding="utf-8")
+        return payload
+    finally:
+        close_new_windows_for_url(
+            previous_window_ids,
+            target_url_contains=PAGE_URLS["orders"],
+            log_step=log_step,
+        )
 
 
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:

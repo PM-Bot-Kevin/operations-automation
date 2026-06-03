@@ -32,7 +32,7 @@ from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     ChromeUiElement,
     PAGE_URLS,
-    close_window_by_id,
+    close_new_windows_for_url,
     element_center,
     focus_window_by_url_ax,
     list_window_descriptors,
@@ -495,50 +495,12 @@ def build_store_export_window(plan: dict[str, Any], store_name: str) -> tuple[di
     start_date = store["earliest_review_date"]
     end_date = plan.get("today") or date.today().isoformat()
     return store, start_date, end_date
-
-
-def snapshot_window_ids() -> set[int]:
-    try:
-        return {int(item["window_id"]) for item in list_window_descriptors()}
-    except Exception:
-        return set()
-
-
-def snapshot_window_ids_optional() -> set[int] | None:
-    try:
-        descriptors = list_window_descriptors()
-    except Exception:
-        return None
-    return {int(item["window_id"]) for item in descriptors}
-
-
 def close_opened_comment_window(previous_window_ids: set[int] | None) -> None:
-    last_error: Exception | None = None
-    remaining_new_ids: set[int] | None = None
-    if previous_window_ids is not None:
-        try:
-            current_window_ids = snapshot_window_ids_optional()
-            if current_window_ids is not None:
-                remaining_new_ids = current_window_ids - previous_window_ids
-                for window_id in sorted(remaining_new_ids, reverse=True):
-                    close_window_by_id(window_id)
-                    log_step(f"已关闭本轮任务窗口：{window_id}")
-                current_window_ids = snapshot_window_ids_optional()
-                if current_window_ids is not None:
-                    remaining_new_ids = current_window_ids - previous_window_ids
-                    if not remaining_new_ids:
-                        return
-        except Exception as exc:
-            last_error = exc
-
-    if previous_window_ids is None:
-        log_step("任务前窗口快照缺失，本轮不做盲关，避免误关用户原窗口")
-        return
-
-    detail = ""
-    if remaining_new_ids:
-        detail = f"，仍残留窗口: {sorted(remaining_new_ids)}"
-    log_step(f"任务窗口收尾关闭失败，忽略：{last_error}{detail}")
+    close_new_windows_for_url(
+        previous_window_ids,
+        target_url_contains=PAGE_URLS["comments"],
+        log_step=log_step,
+    )
 
 
 def locate_comment_page_controls(snapshot: dict[str, Any]) -> dict[str, ChromeUiElement]:

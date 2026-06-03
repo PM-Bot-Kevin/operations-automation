@@ -13,7 +13,7 @@ from ctypes import byref, c_char_p, c_double, c_int32, c_uint32, c_void_p
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -417,6 +417,94 @@ def close_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME, pref
         ],
         [url_contains, "1" if prefer_last else "0"],
     )
+
+
+def snapshot_window_ids_optional(app_name: str = CHROME_APP_NAME) -> set[int] | None:
+    try:
+        descriptors = list_window_descriptors(app_name)
+    except Exception:
+        return None
+    return {int(item["window_id"]) for item in descriptors}
+
+
+def close_new_windows_for_url(
+    previous_window_ids: set[int] | None,
+    *,
+    target_url_contains: str,
+    log_step: Callable[[str], None] | None = None,
+    app_name: str = CHROME_APP_NAME,
+) -> dict[str, Any]:
+    def emit(message: str) -> None:
+        if log_step is not None:
+            log_step(message)
+
+    if previous_window_ids is None:
+        emit("任务前窗口快照缺失，本轮不做盲关，避免误关用户原窗口")
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "missing_previous_snapshot",
+            "closed_window_ids": [],
+            "remaining_window_ids": [],
+        }
+
+    last_error: Exception | None = None
+    closed_window_ids: list[int] = []
+    remaining_window_ids: list[int] = []
+    try:
+        current_descriptors = list_window_descriptors(app_name)
+        candidate_ids = [
+            int(item["window_id"])
+            for item in current_descriptors
+            if int(item["window_id"]) not in previous_window_ids
+            and target_url_contains in str(item.get("active_url", ""))
+        ]
+        for window_id in sorted(candidate_ids, reverse=True):
+            close_window_by_id(window_id, app_name=app_name)
+            closed_window_ids.append(window_id)
+            emit(f"已关闭本轮任务窗口：{window_id}")
+
+        current_descriptors = list_window_descriptors(app_name)
+        remaining_window_ids = [
+            int(item["window_id"])
+            for item in current_descriptors
+            if int(item["window_id"]) not in previous_window_ids
+            and target_url_contains in str(item.get("active_url", ""))
+        ]
+        if not remaining_window_ids:
+            return {
+                "ok": True,
+                "skipped": False,
+                "reason": "",
+                "closed_window_ids": closed_window_ids,
+                "remaining_window_ids": [],
+            }
+    except Exception as exc:
+        last_error = exc
+        current_descriptors = []
+        try:
+            current_descriptors = list_window_descriptors(app_name)
+        except Exception:
+            current_descriptors = []
+        remaining_window_ids = [
+            int(item["window_id"])
+            for item in current_descriptors
+            if int(item["window_id"]) not in previous_window_ids
+            and target_url_contains in str(item.get("active_url", ""))
+        ]
+
+    detail = ""
+    if remaining_window_ids:
+        detail = f"，仍残留窗口: {sorted(remaining_window_ids)}"
+    emit(f"任务窗口收尾关闭失败，忽略：{last_error}{detail}")
+    return {
+        "ok": False,
+        "skipped": False,
+        "reason": "close_failed",
+        "closed_window_ids": closed_window_ids,
+        "remaining_window_ids": sorted(remaining_window_ids),
+        "error": str(last_error) if last_error else "",
+    }
 
 
 def focus_window_by_url(url_contains: str, app_name: str = CHROME_APP_NAME) -> str:
