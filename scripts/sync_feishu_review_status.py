@@ -35,12 +35,12 @@ from xhs_qianfan_access import (
     close_new_windows_for_url,
     element_center,
     focus_window_by_url_ax,
-    list_window_descriptors,
     load_profiles,
     open_page,
     press_front_window_element,
     resolve_profile,
     run_front_window_javascript,
+    snapshot_window_ids_optional,
     set_front_window_element_value,
     wait_for_front_window,
 )

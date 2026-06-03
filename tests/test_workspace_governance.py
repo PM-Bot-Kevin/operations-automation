@@ -741,6 +741,93 @@ print(json.dumps(payload, ensure_ascii=False))
                 allow_auto_match=False,
             )
 
+    def test_fill_feishu_order_skus_closes_only_new_order_windows_on_finish(self) -> None:
+        fill_spec = importlib.util.spec_from_file_location("fill_feishu_order_skus", FILL_SKUS_SCRIPT)
+        assert fill_spec and fill_spec.loader
+        fill_module = importlib.util.module_from_spec(fill_spec)
+        sys.modules[fill_spec.name] = fill_module
+        fill_spec.loader.exec_module(fill_module)
+
+        with tempfile.TemporaryDirectory(prefix="feishu-sku-close-") as temp_dir:
+            root = Path(temp_dir)
+            plan_file = root / "plan.json"
+            local_state = root / "Local State"
+            store_profile_config = root / "xhs_order_query_profiles.json"
+            runtime_dir = root / "runtime"
+
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Profile 32",
+                            "info_cache": {
+                                "Profile 32": {"name": "抱树的koala小姐", "user_name": ""},
+                            },
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            store_profile_config.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "order_query_page_url": "https://ark.xiaohongshu.com/app-order/order/query",
+                        "primary_interaction_mode": "ax",
+                        "fallback_interaction_modes": ["browser_js", "mouse"],
+                        "sku_normalization": {"exact_mappings": {}},
+                        "stores": [
+                            {
+                                "store_name": "抱树的koala小姐",
+                                "profile_directory": "Profile 32",
+                                "profile_name": "抱树的koala小姐",
+                                "enabled": True,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            plan_file.write_text(
+                json.dumps(
+                    {
+                        "order_query": {"store_profile_config_path": str(store_profile_config)},
+                        "stores": [{"store_name": "抱树的koala小姐", "suggested_rounds": [["P1001"]]}],
+                        "records": [{"record_id": "rec1", "store_name": "抱树的koala小姐", "order_no": "P1001"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            args = SimpleNamespace(
+                plan_file=str(plan_file),
+                store="抱树的koala小姐",
+                interaction_mode="ax",
+                local_state_path=str(local_state),
+                runtime_dir=str(runtime_dir),
+                output="",
+                max_rounds=0,
+                max_orders=0,
+            )
+
+            with (
+                mock.patch.object(fill_module, "snapshot_window_ids_optional", return_value={1, 2}),
+                mock.patch.object(fill_module, "ensure_order_page_window"),
+                mock.patch.object(fill_module, "wait_for_order_page"),
+                mock.patch.object(fill_module, "query_order_spec", return_value=("未知规格", "ax")),
+                mock.patch.object(fill_module, "irregular_pause"),
+                mock.patch.object(fill_module, "close_new_windows_for_url") as close_mock,
+            ):
+                payload = fill_module.query_store_orders(args)
+
+            self.assertEqual(payload["updates"][0]["sku_value"], "未知规格")
+            close_mock.assert_called_once()
+            self.assertEqual(close_mock.call_args.args[0], {1, 2})
+            self.assertEqual(close_mock.call_args.kwargs["target_url_contains"], fill_module.PAGE_URLS["orders"])
+
     def test_fill_feishu_order_skus_apply_writes_real_values_per_record(self) -> None:
         with tempfile.TemporaryDirectory(prefix="feishu-sku-apply-") as temp_dir:
             root = Path(temp_dir)
