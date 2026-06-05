@@ -41,6 +41,10 @@
       "path": "scripts/install_backup_launchagent.sh"
     },
     {
+      "label": "Git 忽略规则",
+      "path": ".gitignore"
+    },
+    {
       "label": "维护文档",
       "path": "docs/workspace_maintenance.md"
     },
@@ -91,11 +95,46 @@
     "remote_name": "origin",
     "branch": "main",
     "require_ssh": true,
+    "require_remote_match_governance": true,
     "automatic_schedule": {
       "backup_time": "10:00",
       "check_time": "10:20"
     },
-    "code_only_notice": "GitHub 是代码备份，不是真实业务数据备份"
+    "code_only_notice": "GitHub 是代码备份，不是真实业务数据备份",
+    "forbidden_path_prefixes": [
+      "runtime/",
+      "releases/",
+      "release-log/",
+      ".github_backup_logs/",
+      ".artifacts/",
+      ".playwright-cli/",
+      ".playwright-mcp/",
+      ".tmp/",
+      ".next/"
+    ],
+    "forbidden_exact_paths": [
+      "current",
+      ".env",
+      ".envrc"
+    ],
+    "forbidden_name_keywords": [
+      "secret",
+      "token",
+      "credential"
+    ],
+    "forbidden_root_debug_extensions": [
+      "png",
+      "jpg",
+      "jpeg",
+      "gif",
+      "webp",
+      "csv",
+      "tsv",
+      "zip",
+      "tar",
+      "gz",
+      "tgz"
+    ]
   },
   "cross_workspace": {
     "policy_notice": "跨工作区只允许连接正式入口",
@@ -140,7 +179,33 @@
       "path": "scripts/github_backup.sh",
       "must_contain": [
         "EXPECTED_BRANCH=\"${BACKUP_EXPECTED_BRANCH:-main}\"",
-        "git@github.com:"
+        "git@github.com:",
+        "治理配置缺少正式 GitHub SSH 远端",
+        ".artifacts/",
+        "拒绝备份这些内容，请先处理后再试"
+      ]
+    },
+    {
+      "label": "GitHub 自动备份安装脚本必须固化时间和环境变量",
+      "path": "scripts/install_backup_launchagent.sh",
+      "must_contain": [
+        "origin 远端与治理配置不一致",
+        "<key>EnvironmentVariables</key>",
+        "BACKUP_STATE_DIR",
+        "<integer>10</integer>",
+        "<integer>20</integer>"
+      ]
+    },
+    {
+      "label": "Git 忽略规则必须拦截本地运行态和调试产物",
+      "path": ".gitignore",
+      "must_contain": [
+        ".github_backup_logs/",
+        ".artifacts/",
+        ".tmp/",
+        ".next/",
+        "/*.png",
+        "/*.csv"
       ]
     },
     {
@@ -150,7 +215,8 @@
         "只允许连接对方正式入口",
         "默认禁止连接仓库镜像、临时副本、worktree、手工复制目录、历史目录",
         "默认先按“站点分型”决定长期运行方案",
-        "云端正式站 -> 本机正式站 -> 本机权限例外站"
+        "云端正式站 -> 本机正式站 -> 本机权限例外站",
+        ".tmp / .next / 调试截图 / 临时导出物"
       ]
     },
     {
@@ -198,7 +264,11 @@
       "path": "BACKUP.md",
       "must_contain": [
         "GitHub 备份只负责代码、文档、脚本、测试和配置模板",
-        "不负责真实业务数据"
+        "不负责真实业务数据",
+        "每天 `10:00` 自动备份",
+        "不需要你每天重新安装或手动触发",
+        "调试截图",
+        "origin/main"
       ]
     }
   ]

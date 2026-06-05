@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${BACKUP_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+CONFIG_PATH="${BACKUP_CONFIG_PATH:-$REPO_ROOT/config/workspace_governance.json}"
 
 MODE="manual"
 CUSTOM_MESSAGE=""
@@ -30,6 +31,7 @@ PUSHED_HEAD=""
 NOTIFICATION_SENT="false"
 MESSAGE=""
 IN_FAIL="0"
+EXPECTED_REMOTE_URL=""
 
 FORBIDDEN_PREFIXES=(
   "runtime/"
@@ -37,11 +39,42 @@ FORBIDDEN_PREFIXES=(
   "release-log/"
   ".github_backup_logs/"
   "__pycache__/"
+  ".pytest_cache/"
+  ".mypy_cache/"
+  ".ruff_cache/"
+  ".codex-staging/"
+  ".claude-attachments/"
+  ".playwright-cli/"
+  ".playwright-mcp/"
+  ".artifacts/"
+  ".tmp/"
+  ".tmp-"
+  ".next/"
+  ".next-"
+  ".venv/"
+  "venv/"
+  "env/"
+  "node_modules/"
+  "coverage/"
+  "htmlcov/"
 )
 
 FORBIDDEN_PATHS=(
   "current"
   ".env"
+  ".envrc"
+)
+
+FORBIDDEN_KEYWORDS=(
+  "secret"
+  "secrets"
+  "token"
+  "credential"
+  "credentials"
+  "private-key"
+  "private_key"
+  "apikey"
+  "api-key"
 )
 
 now() {
@@ -50,6 +83,27 @@ now() {
 
 current_head() {
   "$GIT_BIN" rev-parse HEAD 2>/dev/null || true
+}
+
+load_expected_remote_from_config() {
+  if [[ -n "$EXPECTED_REMOTE_URL" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$CONFIG_PATH" ]]; then
+    fail "治理配置不存在，无法确认正式 GitHub SSH 远端: $CONFIG_PATH" 1
+  fi
+  EXPECTED_REMOTE_URL="$("$PYTHON_BIN" - <<'PY' "$CONFIG_PATH"
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload.get("workspace", {}).get("github_repository_ssh", ""))
+PY
+)"
+  if [[ -z "$EXPECTED_REMOTE_URL" ]]; then
+    fail "治理配置缺少正式 GitHub SSH 远端，拒绝继续备份。" 1
+  fi
 }
 
 write_state() {
@@ -168,12 +222,16 @@ ensure_main_branch() {
 }
 
 ensure_remote_uses_ssh() {
+  load_expected_remote_from_config
   REMOTE_URL="$("$GIT_BIN" remote get-url "$REMOTE_NAME" 2>/dev/null || true)"
   if [[ -z "$REMOTE_URL" ]]; then
     fail "GitHub SSH 远端未配置，请先创建仓库并设置 origin。" 1
   fi
   if [[ "$REMOTE_URL" != git@github.com:* ]]; then
     fail "GitHub 备份只允许使用 SSH 远端，当前是: $REMOTE_URL" 1
+  fi
+  if [[ "$REMOTE_URL" != "$EXPECTED_REMOTE_URL" ]]; then
+    fail "GitHub 备份远端与治理配置不一致，当前是: $REMOTE_URL" 1
   fi
 }
 
@@ -183,22 +241,42 @@ stage_changes() {
 
 is_forbidden_path() {
   local path="$1"
+  local path_lower=""
+  local basename_lower=""
   local prefix=""
+  local keyword=""
 
-  case "$path" in
-    *.log|*.pyc|*.pyo|*.pyd|*.sqlite|*.sqlite3|*.db|.DS_Store|.env.*)
+  path_lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+  basename_lower="$(basename "$path_lower")"
+
+  case "$path_lower" in
+    *.log|*.pyc|*.pyo|*.pyd|*.sqlite|*.sqlite3|*.db|*.pem|*.key|*.p12|*.pfx|*.crt|*.cer|*.der|*.bak|*.backup|*.tmp|*.temp|*.zip|*.tar|*.tar.gz|*.tgz|.ds_store|.env.*|*/.env|*/.env.*)
       return 0
       ;;
   esac
 
+  if [[ "$path" != */* ]]; then
+    case "$path_lower" in
+      *.png|*.jpg|*.jpeg|*.gif|*.webp|*.csv|*.tsv|*.zip|*.tar|*.tar.gz|*.tgz|*.tmp)
+        return 0
+        ;;
+    esac
+  fi
+
   for prefix in "${FORBIDDEN_PREFIXES[@]}"; do
-    if [[ "$path" == "$prefix"* ]]; then
+    if [[ "$path_lower" == "$prefix"* ]]; then
       return 0
     fi
   done
 
   for prefix in "${FORBIDDEN_PATHS[@]}"; do
-    if [[ "$path" == "$prefix" ]]; then
+    if [[ "$path_lower" == "$prefix" || "$basename_lower" == "$prefix" ]]; then
+      return 0
+    fi
+  done
+
+  for keyword in "${FORBIDDEN_KEYWORDS[@]}"; do
+    if [[ "$path_lower" == *"$keyword"* ]]; then
       return 0
     fi
   done
@@ -208,12 +286,18 @@ is_forbidden_path() {
 
 ensure_no_forbidden_staged_paths() {
   local staged_path=""
-  while IFS= read -r staged_path; do
+  local forbidden_paths=()
+  while IFS= read -r -d '' staged_path; do
     [[ -z "$staged_path" ]] && continue
     if is_forbidden_path "$staged_path"; then
-      fail "Refusing to commit forbidden path: $staged_path" 1
+      forbidden_paths+=("$staged_path")
     fi
-  done < <("$GIT_BIN" diff --cached --name-only)
+  done < <("$GIT_BIN" diff --cached --name-only -z)
+
+  if [[ "${#forbidden_paths[@]}" -gt 0 ]]; then
+    "$GIT_BIN" reset -q HEAD -- "${forbidden_paths[@]}" >/dev/null 2>&1 || true
+    fail "拒绝备份这些内容，请先处理后再试: ${forbidden_paths[*]}" 1
+  fi
 }
 
 build_commit_message() {

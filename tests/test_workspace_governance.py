@@ -19,6 +19,7 @@ VALIDATE_SCRIPT = REPO_ROOT / "scripts" / "validate_workspace_governance.py"
 RELEASE_SCRIPT = REPO_ROOT / "scripts" / "release_workspace.sh"
 ROLLBACK_SCRIPT = REPO_ROOT / "scripts" / "rollback_workspace.sh"
 BACKUP_SCRIPT = REPO_ROOT / "scripts" / "github_backup.sh"
+INSTALL_BACKUP_SCRIPT = REPO_ROOT / "scripts" / "install_backup_launchagent.sh"
 EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
 FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
@@ -1798,6 +1799,9 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "README.md", "默认决策顺序固定是：`云端正式站 -> 本机正式站 -> 本机权限例外站`"),
             (REPO_ROOT / "README.md", "必须先得到用户明确确认，才允许新增第 4 类长期方案"),
+            (REPO_ROOT / "README.md", "远端必须和治理配置里的正式 SSH 地址一致"),
+            (REPO_ROOT / "README.md", "调试截图"),
+            (REPO_ROOT / "README.md", "不需要你每天重新安装或手动触发"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
@@ -1818,6 +1822,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "AGENTS.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "AGENTS.md", "默认先按“站点分型”决定长期运行方案"),
             (REPO_ROOT / "AGENTS.md", "云端正式站 -> 本机正式站 -> 本机权限例外站"),
+            (REPO_ROOT / "AGENTS.md", ".tmp / .next / 调试截图 / 临时导出物"),
             (REPO_ROOT / "HANDOVER.md", "回滚只切代码版本，不碰 `runtime/`"),
             (REPO_ROOT / "HANDOVER.md", "触发口径是自然语言"),
             (REPO_ROOT / "HANDOVER.md", "默认优先复用用户现有的 Chrome 店铺资料"),
@@ -1852,10 +1857,160 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "先在飞书或别的外部表里把目标订单缩小到最少"),
             (REPO_ROOT / "BACKUP.md", "只负责代码、文档、脚本、测试和配置模板"),
             (REPO_ROOT / "HANDOVER.md", "operations-automation"),
+            (REPO_ROOT / "HANDOVER.md", ".github_backup_logs/"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "GitHub 自动备份继续固定 `10:00` 主跑、`10:20` 巡检"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "调试截图"),
+            (REPO_ROOT / "BACKUP.md", "只允许推送到治理配置里那一个正式 GitHub SSH 远端"),
+            (REPO_ROOT / "BACKUP.md", "不需要你每天重新安装或手动触发"),
+            (REPO_ROOT / "BACKUP.md", "调试截图"),
             (BACKUP_SCRIPT, 'EXPECTED_BRANCH="${BACKUP_EXPECTED_BRANCH:-main}"'),
             (BACKUP_SCRIPT, 'com.luogic.operations-automation.github-backup'),
+            (BACKUP_SCRIPT, "治理配置缺少正式 GitHub SSH 远端"),
+            (BACKUP_SCRIPT, "拒绝备份这些内容，请先处理后再试"),
+            (INSTALL_BACKUP_SCRIPT, "BACKUP_STATE_DIR"),
+            (INSTALL_BACKUP_SCRIPT, "origin 远端与治理配置不一致"),
         ]:
             self.assertIn(fragment, path.read_text(encoding="utf-8"))
+
+    def test_backup_script_blocks_sensitive_and_debug_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="backup-guardrails-") as temp_dir:
+            root = Path(temp_dir)
+            repo_dir = root / "repo"
+            shutil.copytree(
+                REPO_ROOT,
+                repo_dir,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "releases", "current", "runtime", "release-log", ".github_backup_logs"),
+            )
+
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Backup Guardrails Test"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "backup-guardrails@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            config_path = repo_dir / "config" / "workspace_governance.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["workspace"]["absolute_path"] = str(repo_dir)
+            config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            subprocess.run(
+                ["git", "remote", "add", "origin", config["workspace"]["github_repository_ssh"]],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "bootstrap"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            (repo_dir / ".tmp").mkdir()
+            (repo_dir / ".tmp" / "export.csv").write_text("order_id\n1\n", encoding="utf-8")
+            (repo_dir / "debug-shot.png").write_bytes(b"png")
+            (repo_dir / "customer_token.txt").write_text("secret-token\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "-f", ".tmp/export.csv", "debug-shot.png"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            completed = subprocess.run(
+                ["/bin/bash", str(repo_dir / "scripts" / "github_backup.sh")],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("拒绝备份这些内容，请先处理后再试", completed.stderr)
+            self.assertIn(".tmp/export.csv", completed.stderr)
+            self.assertIn("debug-shot.png", completed.stderr)
+            self.assertIn("customer_token.txt", completed.stderr)
+
+            staged_after = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(staged_after.stdout.strip(), "")
+
+    def test_install_backup_launchagent_writes_schedule_and_environment(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="backup-launchagent-") as temp_dir:
+            root = Path(temp_dir)
+            repo_dir = root / "repo"
+            fake_bin_dir = root / "bin"
+            fake_home = root / "home"
+            launchctl_log = root / "launchctl.log"
+
+            shutil.copytree(
+                REPO_ROOT,
+                repo_dir,
+                ignore=shutil.ignore_patterns(".git", "__pycache__", "releases", "current", "runtime", "release-log", ".github_backup_logs"),
+            )
+            fake_bin_dir.mkdir()
+            fake_home.mkdir()
+
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "LaunchAgent Test"], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "launchagent@example.com"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            config_path = repo_dir / "config" / "workspace_governance.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["workspace"]["absolute_path"] = str(repo_dir)
+            config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            subprocess.run(
+                ["git", "remote", "add", "origin", config["workspace"]["github_repository_ssh"]],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "bootstrap"], cwd=repo_dir, check=True, capture_output=True, text=True)
+
+            launchctl_stub = fake_bin_dir / "launchctl"
+            launchctl_stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "echo \"$@\" >> \"$LAUNCHCTL_LOG\"\n",
+                encoding="utf-8",
+            )
+            launchctl_stub.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "PATH": f"{fake_bin_dir}:{os.environ['PATH']}",
+                "LAUNCHCTL_LOG": str(launchctl_log),
+            }
+            completed = subprocess.run(
+                ["/bin/bash", str(repo_dir / "scripts" / "install_backup_launchagent.sh")],
+                cwd=repo_dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertIn("10:00 backup / 10:20 check", completed.stdout)
+            backup_plist = fake_home / "Library" / "LaunchAgents" / "com.luogic.operations-automation.github-backup.plist"
+            check_plist = fake_home / "Library" / "LaunchAgents" / "com.luogic.operations-automation.github-backup-check.plist"
+            self.assertTrue(backup_plist.exists())
+            self.assertTrue(check_plist.exists())
+
+            backup_content = backup_plist.read_text(encoding="utf-8")
+            check_content = check_plist.read_text(encoding="utf-8")
+            self.assertIn("<key>EnvironmentVariables</key>", backup_content)
+            self.assertIn("BACKUP_STATE_DIR", backup_content)
+            self.assertIn("<integer>10</integer>", backup_content)
+            self.assertIn("<integer>0</integer>", backup_content)
+            self.assertIn("BACKUP_STATE_DIR", check_content)
+            self.assertIn("<integer>20</integer>", check_content)
+
+            launchctl_calls = launchctl_log.read_text(encoding="utf-8")
+            self.assertIn("load", launchctl_calls)
+            self.assertIn("unload", launchctl_calls)
 
     def test_release_and_rollback_manage_current_without_touching_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="workspace-governance-") as temp_dir:

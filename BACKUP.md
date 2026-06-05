@@ -18,9 +18,10 @@ bash scripts/github_backup.sh
 行为：
 
 - 只允许从 `main` 备份
-- 只允许推送到 GitHub SSH 远端
+- 只允许推送到治理配置里那一个正式 GitHub SSH 远端
 - 如果没有代码改动，不会制造空提交
 - 如果有改动，会自动提交并推送到 `origin/main`
+- 如果发现 `runtime/`、`releases/`、`release-log/`、`.github_backup_logs/`、`current`、`.tmp/`、`.next/`、调试截图、根目录临时导出物，或文件名里带 `secret` / `token` / `credential` 的内容，会直接拒绝备份
 
 ## 自动备份
 
@@ -36,6 +37,7 @@ bash scripts/install_backup_launchagent.sh
 - 每天 `10:20` 自动巡检
 - 成功不通知
 - 失败发本机通知，并在 `.github_backup_logs/` 留日志
+- 安装一次后持续生效，不需要你每天重新安装或手动触发
 
 ## 当前接入口径
 
@@ -65,6 +67,12 @@ bash scripts/install_backup_launchagent.sh
 - `releases/`
 - `current`
 - `release-log/`
+- `.github_backup_logs/`
+- `.tmp/`
+- `.next/`
+- 调试截图
+- 根目录临时导出物
+- 文件名里明显带 `secret`、`token`、`credential` 的内容
 - 缓存、日志、临时文件
 
 这些规则已经由 `.gitignore`、备份脚本和治理校验共同限制。

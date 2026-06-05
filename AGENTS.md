@@ -29,8 +29,11 @@
 
 ## GitHub 备份规则
 - GitHub 远端优先只认 SSH。
+- GitHub 备份脚本和自动安装脚本都必须继续对齐 `config/workspace_governance.json` 里的正式 SSH 远端，不允许只要是 GitHub SSH 就放行。
 - GitHub 只备份代码、文档、脚本、测试和配置模板。
 - `.env`、密钥、缓存、正式运行数据、发布产物、日志都不能直接进 GitHub。
+- `runtime/`、`releases/`、`release-log/`、`.github_backup_logs/`、`current`、`.tmp / .next / 调试截图 / 临时导出物` 默认都要拦截，避免误提交。
+- 文件名里明显带 `secret`、`token`、`credential` 这类敏感字样的内容，默认也不能进 GitHub。
 - 自动备份默认每天 `10:00` 运行，`10:20` 自动巡检；成功不通知，失败保留日志并发本机通知。
 
 ## 自测规则

@@ -105,8 +105,10 @@ bash scripts/install_backup_launchagent.sh
 
 - 只保留长期主分支 `main`
 - GitHub 远端优先只认 SSH
+- GitHub 备份和自动安装都要继续对齐 `config/workspace_governance.json` 里的正式 SSH 远端，不要只校验“是不是 GitHub SSH”
 - 自动备份默认由 macOS `launchd` 执行
 - GitHub 是代码备份，不是真实业务数据备份
+- `runtime/`、`releases/`、`release-log/`、`.github_backup_logs/`、`current`、`.tmp/`、`.next/`、调试截图、根目录临时导出物，以及名字里带 `secret` / `token` / `credential` 的内容都不能进 GitHub
 - 当前 GitHub SSH 远端固定为 `git@github.com:PM-Bot-Kevin/operations-automation.git`
 
 ## 改名维护备注

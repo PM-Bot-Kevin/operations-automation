@@ -92,5 +92,7 @@
 
 - 正式发布前自动先跑治理校验
 - GitHub 是代码备份，不是真实业务数据备份
+- GitHub 自动备份继续固定 `10:00` 主跑、`10:20` 巡检，安装一次后不需要每天重新安装或手动触发
+- GitHub 备份除了 `runtime/`、`releases/`、`current`、`release-log/`、`.github_backup_logs/`，还要继续拦截 `.tmp/`、`.next/`、调试截图、根目录临时导出物，以及名字里带 `secret` / `token` / `credential` 的内容
 - 回滚只切代码，不碰 `runtime/`
 - 当前长期只保留 `main`

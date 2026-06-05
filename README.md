@@ -88,7 +88,10 @@ bash scripts/install_backup_launchagent.sh
 注意：
 
 - GitHub 是代码备份，不是真实业务数据备份
-- `runtime/`、`releases/`、`current`、`release-log/`、`.env`、密钥、缓存、日志都不会备份进 GitHub
+- 远端必须和治理配置里的正式 SSH 地址一致，不是“任意 GitHub SSH 都行”
+- `runtime/`、`releases/`、`current`、`release-log/`、`.github_backup_logs/`、`.env`、密钥、缓存、日志都不会备份进 GitHub
+- `.tmp/`、`.next/`、调试截图、根目录临时导出物、以及文件名里明显带 `secret` / `token` / `credential` 的内容也会被拦截
+- 自动任务安装一次后会长期按时跑；不需要你每天重新安装或手动触发
 - 当前 GitHub SSH 远端：
 
 ```bash
