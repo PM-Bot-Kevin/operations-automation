@@ -30,9 +30,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
+    ChromeTaskSession,
     ChromeUiElement,
     PAGE_URLS,
-    close_new_windows_for_url,
+    bind_chrome_task_session,
+    close_chrome_task_session,
     element_center,
     focus_window_by_url_ax,
     load_profiles,
@@ -40,7 +42,7 @@ from xhs_qianfan_access import (
     press_front_window_element,
     resolve_profile,
     run_front_window_javascript,
-    snapshot_window_ids_optional,
+    start_chrome_task_session,
     set_front_window_element_value,
     wait_for_front_window,
 )
@@ -495,12 +497,10 @@ def build_store_export_window(plan: dict[str, Any], store_name: str) -> tuple[di
     start_date = store["earliest_review_date"]
     end_date = plan.get("today") or date.today().isoformat()
     return store, start_date, end_date
-def close_opened_comment_window(previous_window_ids: set[int] | None) -> None:
-    close_new_windows_for_url(
-        previous_window_ids,
-        target_url_contains=PAGE_URLS["comments"],
-        log_step=log_step,
-    )
+
+
+def close_opened_comment_window(session: ChromeTaskSession) -> dict[str, Any]:
+    return close_chrome_task_session(session, log_step=log_step)
 
 
 def locate_comment_page_controls(snapshot: dict[str, Any]) -> dict[str, ChromeUiElement]:
@@ -795,18 +795,20 @@ def export_store_via_browser_js(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids_optional()
+    session = start_chrome_task_session(PAGE_URLS["comments"])
+    payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
         irregular_pause(3.0, 6.0)
         focus_comment_window_if_possible()
-        wait_for_front_window(
+        snapshot = wait_for_front_window(
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
+        bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         log_step("评价页就绪，开始页内写入日期并搜索")
         fill_result = ensure_browser_js_ok(
             run_front_window_json(build_comment_page_fill_and_search_script(start_date, end_date)),
@@ -831,7 +833,7 @@ def export_store_via_browser_js(
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
-        return {
+        payload = {
             "interaction_mode": "browser_js",
             "store_name": store_name,
             "profile_name": profile.name or profile.directory,
@@ -842,8 +844,11 @@ def export_store_via_browser_js(
             "saved_file": capture["saved_file"],
             "saved_at": capture["saved_at"],
         }
+        return payload
     finally:
-        close_opened_comment_window(previous_window_ids)
+        cleanup = close_opened_comment_window(session)
+        if payload is not None:
+            payload["cleanup"] = cleanup
 
 
 def export_store_via_mouse(
@@ -859,8 +864,9 @@ def export_store_via_mouse(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids_optional()
+    session = start_chrome_task_session(PAGE_URLS["comments"])
     pyautogui = _load_pyautogui()
+    payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
@@ -872,6 +878,7 @@ def export_store_via_mouse(
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
+        bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         controls = locate_comment_page_controls(snapshot)
         log_step("定位评价页成功，开始低频填写日期")
 
@@ -907,7 +914,7 @@ def export_store_via_mouse(
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
-        return {
+        payload = {
             "interaction_mode": "mouse",
             "store_name": store_name,
             "profile_name": profile.name or profile.directory,
@@ -918,8 +925,11 @@ def export_store_via_mouse(
             "saved_file": capture["saved_file"],
             "saved_at": capture["saved_at"],
         }
+        return payload
     finally:
-        close_opened_comment_window(previous_window_ids)
+        cleanup = close_opened_comment_window(session)
+        if payload is not None:
+            payload["cleanup"] = cleanup
 
 
 def export_store_via_ax(
@@ -935,7 +945,8 @@ def export_store_via_ax(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    previous_window_ids = snapshot_window_ids_optional()
+    session = start_chrome_task_session(PAGE_URLS["comments"])
+    payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
         open_page(profile, "comments", dry_run=False)
@@ -947,6 +958,7 @@ def export_store_via_ax(
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
         )
+        bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         controls = locate_comment_page_controls(snapshot)
         log_step("定位评价页成功，开始 AX 填写日期")
         set_front_window_element_value(controls["start_date_field"].index, start_date)
@@ -978,7 +990,7 @@ def export_store_via_ax(
             timeout_seconds=export_timeout_seconds,
         )
         log_step(f"已保存导出文件：{capture['saved_file']}")
-        return {
+        payload = {
             "interaction_mode": "ax",
             "store_name": store_name,
             "profile_name": profile.name or profile.directory,
@@ -989,8 +1001,11 @@ def export_store_via_ax(
             "saved_file": capture["saved_file"],
             "saved_at": capture["saved_at"],
         }
+        return payload
     finally:
-        close_opened_comment_window(previous_window_ids)
+        cleanup = close_opened_comment_window(session)
+        if payload is not None:
+            payload["cleanup"] = cleanup
 
 
 def wait_for_export_capture(

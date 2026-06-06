@@ -314,8 +314,12 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertEqual(
             descriptors,
             [
-                {"window_id": 101, "active_url": "https://example.com"},
-                {"window_id": 202, "active_url": "https://ark.xiaohongshu.com/app-item/comment/analysis"},
+                {"window_id": 101, "active_url": "https://example.com", "window_title": ""},
+                {
+                    "window_id": 202,
+                    "active_url": "https://ark.xiaohongshu.com/app-item/comment/analysis",
+                    "window_title": "",
+                },
             ],
         )
         self.assertEqual(closed_id, 202)
@@ -814,20 +818,29 @@ print(json.dumps(payload, ensure_ascii=False))
                 max_orders=0,
             )
 
+            session = SimpleNamespace(
+                target_url_contains=fill_module.PAGE_URLS["orders"],
+                previous_window_ids={1, 2},
+            )
             with (
-                mock.patch.object(fill_module, "snapshot_window_ids_optional", return_value={1, 2}),
-                mock.patch.object(fill_module, "ensure_order_page_window"),
+                mock.patch.object(fill_module, "start_chrome_task_session", return_value=session),
+                mock.patch.object(fill_module, "ensure_order_page_window", return_value={"window_title": "订单管理"}),
+                mock.patch.object(fill_module, "bind_chrome_task_session"),
                 mock.patch.object(fill_module, "wait_for_order_page"),
                 mock.patch.object(fill_module, "query_order_spec", return_value=("未知规格", "ax")),
                 mock.patch.object(fill_module, "irregular_pause"),
-                mock.patch.object(fill_module, "close_new_windows_for_url") as close_mock,
+                mock.patch.object(
+                    fill_module,
+                    "close_chrome_task_session",
+                    return_value={"ok": True, "closed_window_ids": [9], "remaining_window_ids": []},
+                ) as close_mock,
             ):
                 payload = fill_module.query_store_orders(args)
 
             self.assertEqual(payload["updates"][0]["sku_value"], "未知规格")
+            self.assertEqual(payload["cleanup"]["closed_window_ids"], [9])
             close_mock.assert_called_once()
-            self.assertEqual(close_mock.call_args.args[0], {1, 2})
-            self.assertEqual(close_mock.call_args.kwargs["target_url_contains"], fill_module.PAGE_URLS["orders"])
+            self.assertEqual(close_mock.call_args.args[0], session)
 
     def test_fill_feishu_order_skus_apply_writes_real_values_per_record(self) -> None:
         with tempfile.TemporaryDirectory(prefix="feishu-sku-apply-") as temp_dir:
@@ -1359,17 +1372,20 @@ print(json.dumps(payload, ensure_ascii=False))
             "saved_at": "20260531-170000",
         }
         profile = mock.Mock(directory="Profile 32", name="抱树的koala小姐")
+        session = module.ChromeTaskSession(target_url_contains=module.PAGE_URLS["comments"], previous_window_ids={1, 2})
+        cleanup = {"ok": True, "strategy": "binding", "closed_window_ids": [9], "remaining_window_ids": []}
         with (
-            mock.patch.object(module, "snapshot_window_ids_optional", return_value={1, 2}),
+            mock.patch.object(module, "start_chrome_task_session", return_value=session),
             mock.patch.object(module, "open_page"),
             mock.patch.object(module, "irregular_pause"),
             mock.patch.object(module, "focus_comment_window_if_possible"),
             mock.patch.object(module, "wait_for_front_window", side_effect=[{"elements": []}, {"elements": []}]),
+            mock.patch.object(module, "bind_chrome_task_session"),
             mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
             mock.patch.object(module, "set_front_window_element_value"),
             mock.patch.object(module, "press_front_window_element"),
             mock.patch.object(module, "wait_for_export_capture", return_value=capture),
-            mock.patch.object(module, "close_opened_comment_window") as close_mock,
+            mock.patch.object(module, "close_opened_comment_window", return_value=cleanup) as close_mock,
         ):
             payload = module.export_store_via_ax(
                 store_name="抱树的koala小姐",
@@ -1385,7 +1401,8 @@ print(json.dumps(payload, ensure_ascii=False))
 
         self.assertEqual(payload["interaction_mode"], "ax")
         self.assertEqual(payload["saved_file"], "/tmp/export.csv")
-        close_mock.assert_called_once_with({1, 2})
+        self.assertEqual(payload["cleanup"], cleanup)
+        close_mock.assert_called_once_with(session)
 
     def test_sync_review_status_safe_window_close_never_breaks_main_flow(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -1394,13 +1411,11 @@ print(json.dumps(payload, ensure_ascii=False))
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
 
-        with (
-            mock.patch.object(module, "close_new_windows_for_url", return_value={"ok": False}) as close_mock,
-        ):
-            module.close_opened_comment_window(set())
+        session = module.ChromeTaskSession(target_url_contains=module.PAGE_URLS["comments"], previous_window_ids={1, 2})
+        with mock.patch.object(module, "close_chrome_task_session", return_value={"ok": False}) as close_mock:
+            module.close_opened_comment_window(session)
 
-        close_mock.assert_called_once()
-        self.assertEqual(close_mock.call_args.kwargs["target_url_contains"], module.PAGE_URLS["comments"])
+        close_mock.assert_called_once_with(session, log_step=module.log_step)
 
     def test_sync_review_status_safe_window_close_skips_blind_close_without_snapshot(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -1409,13 +1424,15 @@ print(json.dumps(payload, ensure_ascii=False))
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
 
-        with (
-            mock.patch.object(module, "close_new_windows_for_url", return_value={"ok": False, "skipped": True}) as close_mock,
-        ):
-            module.close_opened_comment_window(None)
+        session = module.ChromeTaskSession(target_url_contains=module.PAGE_URLS["comments"], previous_window_ids=None)
+        with mock.patch.object(
+            module,
+            "close_chrome_task_session",
+            return_value={"ok": False, "skipped": True},
+        ) as close_mock:
+            module.close_opened_comment_window(session)
 
-        close_mock.assert_called_once()
-        self.assertIsNone(close_mock.call_args.args[0])
+        close_mock.assert_called_once_with(session, log_step=module.log_step)
 
     def test_sync_review_status_safe_window_close_closes_only_new_comment_windows(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -1424,17 +1441,15 @@ print(json.dumps(payload, ensure_ascii=False))
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
 
-        with (
-            mock.patch.object(
-                module,
-                "close_new_windows_for_url",
-                return_value={"ok": True, "closed_window_ids": [9], "remaining_window_ids": []},
-            ) as close_mock,
-        ):
-            module.close_opened_comment_window({1, 2})
+        session = module.ChromeTaskSession(target_url_contains=module.PAGE_URLS["comments"], previous_window_ids={1, 2})
+        with mock.patch.object(
+            module,
+            "close_chrome_task_session",
+            return_value={"ok": True, "closed_window_ids": [9], "remaining_window_ids": []},
+        ) as close_mock:
+            module.close_opened_comment_window(session)
 
-        close_mock.assert_called_once()
-        self.assertEqual(close_mock.call_args.args[0], {1, 2})
+        close_mock.assert_called_once_with(session, log_step=module.log_step)
 
     def test_qianfan_access_close_new_windows_for_url_closes_only_new_target_windows(self) -> None:
         spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
@@ -1494,6 +1509,82 @@ print(json.dumps(payload, ensure_ascii=False))
         close_mock.assert_not_called()
         self.assertTrue(result["skipped"])
         self.assertTrue(any("不做盲关" in item for item in logs))
+
+    def test_qianfan_access_bind_task_session_prefers_unique_new_window(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        session = module.ChromeTaskSession(
+            target_url_contains=module.PAGE_URLS["comments"],
+            previous_window_ids={
+                ("example", "https://example.com"),
+                ("旧评价页", module.PAGE_URLS["comments"]),
+            },
+        )
+        snapshot = {
+            "pid": 123,
+            "window_pointer": 456,
+            "window_title": "抱树的koala小姐 - 评价管理",
+            "active_url": module.PAGE_URLS["comments"],
+            "elements": [],
+        }
+        logs: list[str] = []
+        with mock.patch.object(
+            module,
+            "list_window_snapshots",
+            return_value=[
+                {"pid": 1, "window_pointer": 10, "active_url": "https://example.com", "window_title": "example", "elements": []},
+                {"pid": 2, "window_pointer": 20, "active_url": module.PAGE_URLS["comments"], "window_title": "旧评价页", "elements": []},
+                {"pid": 123, "window_pointer": 456, "active_url": module.PAGE_URLS["comments"], "window_title": "抱树的koala小姐 - 评价管理", "elements": []},
+            ],
+        ):
+            module.bind_chrome_task_session(session, snapshot, title_hint="抱树的koala小姐", log_step=logs.append)
+
+        self.assertIsNotNone(session.binding)
+        self.assertEqual(session.binding["binding_target"], "123:456")
+        self.assertTrue(any("已绑定本轮任务窗口：123:456" in item for item in logs))
+
+    def test_qianfan_access_close_task_session_skips_when_binding_lost_ownership(self) -> None:
+        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        session = module.ChromeTaskSession(target_url_contains=module.PAGE_URLS["comments"], previous_window_ids={1, 2})
+        session.binding = {
+            "window_id": 9,
+            "pid": 123,
+            "window_pointer": 456,
+            "window_title": "抱树的koala小姐 - 评价管理",
+            "active_url": module.PAGE_URLS["comments"],
+            "target_url_contains": module.PAGE_URLS["comments"],
+            "title_hint": "抱树的koala小姐",
+        }
+        logs: list[str] = []
+        with (
+            mock.patch.object(
+                module,
+                "_find_snapshot_for_binding",
+                return_value={
+                    "pid": 123,
+                    "window_pointer": 456,
+                    "window_title": "别的店铺",
+                    "active_url": "https://example.com",
+                    "elements": [],
+                },
+            ),
+            mock.patch.object(module, "close_front_window_via_ax") as close_mock,
+        ):
+            result = module.close_chrome_task_session(session, log_step=logs.append)
+
+        close_mock.assert_not_called()
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "ownership_lost")
+        self.assertTrue(any("不强关" in item for item in logs))
 
     def test_review_status_launch_scripts_pin_python_path(self) -> None:
         main_script = (REPO_ROOT / "scripts" / "review_status_sync_auto.sh").read_text(encoding="utf-8")
@@ -1643,6 +1734,49 @@ print(json.dumps(payload, ensure_ascii=False))
         release_code_root = workspace_root / "releases" / "20260531-170153-cb714d1"
         self.assertEqual(module.resolve_workspace_root(release_code_root), workspace_root)
         self.assertEqual(module.resolve_workspace_root(workspace_root), workspace_root)
+
+    def test_run_review_status_summarizes_cleanup_warnings(self) -> None:
+        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        summary = module.summarize_cleanup_results(
+            [
+                {
+                    "store_name": "抱树的koala小姐",
+                    "export": {
+                        "cleanup": {
+                            "ok": True,
+                            "reason": "",
+                            "strategy": "binding",
+                            "remaining_window_ids": [],
+                            "binding_window_id": 9,
+                        }
+                    },
+                },
+                {
+                    "store_name": "考拉小姐慢慢来",
+                    "export": {
+                        "cleanup": {
+                            "ok": False,
+                            "reason": "ownership_lost",
+                            "strategy": "binding",
+                            "remaining_window_ids": [11],
+                            "binding_window_id": 11,
+                            "skipped": True,
+                        }
+                    },
+                },
+            ]
+        )
+
+        self.assertEqual(summary["ok_count"], 1)
+        self.assertEqual(summary["warning_count"], 1)
+        self.assertEqual(summary["warnings"][0]["store_name"], "考拉小姐慢慢来")
+        self.assertEqual(summary["warnings"][0]["reason"], "ownership_lost")
 
     def test_sync_review_status_resolves_workspace_root_from_release_copy(self) -> None:
         script = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"

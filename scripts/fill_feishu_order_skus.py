@@ -24,14 +24,15 @@ from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     PAGE_URLS,
     ChromeProfile,
-    close_new_windows_for_url,
+    bind_chrome_task_session,
+    close_chrome_task_session,
     element_center,
     focus_window_by_url_ax,
     load_profiles,
     open_page,
     press_front_window_element,
     run_front_window_javascript,
-    snapshot_window_ids_optional,
+    start_chrome_task_session,
     set_front_window_element_value,
     wait_for_front_window,
 )
@@ -658,9 +659,10 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
     if not rounds:
         raise FillSkuError("计划里没有可执行轮次。")
 
-    previous_window_ids = snapshot_window_ids_optional()
+    session = start_chrome_task_session(PAGE_URLS["orders"])
     try:
-        ensure_order_page_window(store_name, profile)
+        snapshot = ensure_order_page_window(store_name, profile)
+        bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
 
         updates: list[dict[str, str]] = []
         warnings: list[str] = []
@@ -706,17 +708,15 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
             "updates": updates,
             "warnings": warnings,
         }
+        payload["cleanup"] = close_chrome_task_session(session, log_step=log_step)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         output_path.write_text(text, encoding="utf-8")
         latest_output_path.write_text(text, encoding="utf-8")
         return payload
-    finally:
-        close_new_windows_for_url(
-            previous_window_ids,
-            target_url_contains=PAGE_URLS["orders"],
-            log_step=log_step,
-        )
+    except Exception:
+        close_chrome_task_session(session, log_step=log_step)
+        raise
 
 
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:

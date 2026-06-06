@@ -53,6 +53,8 @@ def run_json_command(args: list[str]) -> dict[str, Any]:
         capture_output=True,
         text=True,
     )
+    if completed.stderr.strip():
+        print(completed.stderr.rstrip(), file=sys.stderr, flush=True)
     if completed.returncode != 0:
         message = completed.stderr.strip() or completed.stdout.strip() or "命令执行失败"
         raise ReviewStatusRunError(message)
@@ -128,6 +130,36 @@ def cleanup_export_files(export_payload: dict[str, Any] | None) -> None:
 
 def retryable_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [issue for issue in issues if issue["type"] != "missing_orders"]
+
+
+def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    warnings: list[dict[str, Any]] = []
+    ok_count = 0
+    for item in results:
+        export_payload = item.get("export") or {}
+        cleanup = export_payload.get("cleanup")
+        if not isinstance(cleanup, dict):
+            continue
+        if cleanup.get("ok"):
+            ok_count += 1
+            continue
+        warnings.append(
+            {
+                "store_name": item.get("store_name", ""),
+                "reason": str(cleanup.get("reason", "")).strip(),
+                "strategy": str(cleanup.get("strategy", "")).strip(),
+                "remaining_window_ids": list(cleanup.get("remaining_window_ids", [])),
+                "remaining_targets": list(cleanup.get("remaining_targets", [])),
+                "binding_window_id": cleanup.get("binding_window_id"),
+                "closed_targets": list(cleanup.get("closed_targets", [])),
+                "skipped": bool(cleanup.get("skipped", False)),
+            }
+        )
+    return {
+        "ok_count": ok_count,
+        "warning_count": len(warnings),
+        "warnings": warnings,
+    }
 
 
 def should_run_scheduled_retry(today: str) -> bool:
@@ -221,6 +253,7 @@ def main() -> int:
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "success",
             "summary": plan["summary"],
+            "cleanup": {"ok_count": 0, "warning_count": 0, "warnings": []},
             "issues": [],
             "results": [],
         }
@@ -295,13 +328,19 @@ def main() -> int:
             cleanup_export_files(export_payload)
 
     failed_issues = retryable_issues(issues)
+    cleanup_summary = summarize_cleanup_results(results)
     status = {
         "today": today,
         "mode": args.mode,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "status": "failed" if failed_issues else "success",
+        "status": (
+            "failed"
+            if failed_issues
+            else ("success_with_cleanup_warning" if cleanup_summary["warning_count"] > 0 else "success")
+        ),
         "summary": plan["summary"],
+        "cleanup": cleanup_summary,
         "issues": issues,
         "results": results,
     }

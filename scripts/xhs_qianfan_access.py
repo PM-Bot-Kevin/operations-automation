@@ -130,6 +130,14 @@ class ChromeUiElement:
     size: tuple[int, int] | None
 
 
+@dataclass
+class ChromeTaskSession:
+    target_url_contains: str
+    previous_window_ids: set[int] | None
+    app_name: str = CHROME_APP_NAME
+    binding: dict[str, Any] | None = None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="复用本机已有 Chrome 店铺资料，重新打开小红书千帆页面。",
@@ -324,10 +332,14 @@ def list_window_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, A
             "repeat with windowIndex from 1 to count of windows",
             "set currentWindow to window windowIndex",
             'set currentUrl to ""',
+            'set currentTitle to ""',
             "try",
             "set currentUrl to URL of active tab of currentWindow",
             "end try",
-            'set end of outputLines to ((id of currentWindow as text) & (ASCII character 9) & currentUrl)',
+            "try",
+            "set currentTitle to title of active tab of currentWindow",
+            "end try",
+            'set end of outputLines to ((id of currentWindow as text) & (ASCII character 9) & currentUrl & (ASCII character 9) & currentTitle)',
             "end repeat",
             "set previousDelimiters to AppleScript's text item delimiters",
             "set AppleScript's text item delimiters to linefeed",
@@ -342,6 +354,7 @@ def list_window_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, A
         if not line.strip():
             continue
         window_id_text, _, active_url = line.partition("\t")
+        active_url, _, window_title = active_url.partition("\t")
         window_id_text = window_id_text.strip()
         if not window_id_text.isdigit():
             continue
@@ -349,6 +362,7 @@ def list_window_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, A
             {
                 "window_id": int(window_id_text),
                 "active_url": active_url.strip(),
+                "window_title": window_title.strip(),
             }
         )
     return descriptors
@@ -425,6 +439,291 @@ def snapshot_window_ids_optional(app_name: str = CHROME_APP_NAME) -> set[int] | 
     except Exception:
         return None
     return {int(item["window_id"]) for item in descriptors}
+
+
+def _snapshot_key(snapshot: dict[str, Any]) -> tuple[int, int]:
+    return (
+        int(snapshot.get("pid", 0) or 0),
+        int(snapshot.get("window_pointer", 0) or 0),
+    )
+
+
+def _snapshot_identity(snapshot: dict[str, Any]) -> str:
+    pid, pointer = _snapshot_key(snapshot)
+    return f"{pid}:{pointer}"
+
+
+def _snapshot_signature(snapshot: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(snapshot.get("window_title", "") or "").strip(),
+        str(snapshot.get("active_url", "") or "").strip(),
+    )
+
+
+def snapshot_window_keys_optional(app_name: str = CHROME_APP_NAME) -> set[tuple[str, str]] | None:
+    try:
+        snapshots = list_window_snapshots(app_name)
+    except Exception:
+        return None
+    return {_snapshot_signature(snapshot) for snapshot in snapshots if any(_snapshot_signature(snapshot))}
+
+
+def start_chrome_task_session(
+    target_url_contains: str,
+    *,
+    app_name: str = CHROME_APP_NAME,
+) -> ChromeTaskSession:
+    return ChromeTaskSession(
+        target_url_contains=target_url_contains,
+        previous_window_ids=snapshot_window_keys_optional(app_name),
+        app_name=app_name,
+    )
+
+
+def bind_chrome_task_session(
+    session: ChromeTaskSession,
+    snapshot: dict[str, Any],
+    *,
+    title_hint: str = "",
+    log_step: Callable[[str], None] | None = None,
+) -> ChromeTaskSession:
+    def emit(message: str) -> None:
+        if log_step is not None:
+            log_step(message)
+
+    previous_window_ids = session.previous_window_ids
+    if previous_window_ids is None:
+        emit("任务前窗口快照缺失，无法稳定绑定本轮新开窗口，收尾时将回退到窗口差异兜底")
+        return session
+
+    try:
+        snapshots = list_window_snapshots(session.app_name)
+    except Exception as exc:
+        emit(f"读取窗口快照失败，暂不绑定本轮窗口：{exc}")
+        return session
+
+    candidates = [
+        item
+        for item in snapshots
+        if _snapshot_signature(item) not in previous_window_ids
+        and session.target_url_contains in str(item.get("active_url", ""))
+    ]
+    snapshot_title = str(snapshot.get("window_title", "") or "").strip()
+    direct_match = next(
+        (
+            item
+            for item in candidates
+            if _snapshot_signature(item) == _snapshot_signature(snapshot)
+        ),
+        None,
+    )
+    if direct_match is not None:
+        candidates = [direct_match]
+    elif snapshot_title:
+        titled = [item for item in candidates if str(item.get("window_title", "")).strip() == snapshot_title]
+        if len(titled) == 1:
+            candidates = titled
+    if len(candidates) != 1:
+        emit("未能唯一绑定本轮新开窗口，收尾时将回退到窗口差异兜底")
+        return session
+
+    candidate = candidates[0]
+    session.binding = {
+        "window_id": None,
+        "pid": int(candidate.get("pid", 0) or 0),
+        "window_pointer": int(candidate.get("window_pointer", 0) or 0),
+        "window_title": str(candidate.get("window_title", "") or ""),
+        "active_url": str(candidate.get("active_url", "") or ""),
+        "target_url_contains": session.target_url_contains,
+        "title_hint": title_hint.strip(),
+        "signature": _snapshot_signature(candidate),
+        "binding_target": _snapshot_identity(candidate),
+    }
+    emit(f"已绑定本轮任务窗口：{session.binding['binding_target']}")
+    return session
+
+
+def _binding_matches_snapshot(binding: dict[str, Any], snapshot: dict[str, Any]) -> bool:
+    current_url = str(snapshot.get("active_url", "") or "")
+    if str(binding.get("target_url_contains", "")).strip() not in current_url:
+        return False
+    title_hint = str(binding.get("title_hint", "") or "").strip()
+    if not title_hint:
+        return True
+    text_pool = _window_snapshot_text_pool(snapshot)
+    window_title = str(snapshot.get("window_title", "") or "")
+    return title_hint in window_title or title_hint in text_pool
+
+
+def _find_snapshot_for_binding(binding: dict[str, Any], app_name: str = CHROME_APP_NAME) -> dict[str, Any] | None:
+    target_signature = binding.get("signature")
+    for snapshot in list_window_snapshots(app_name):
+        if _snapshot_signature(snapshot) == target_signature:
+            return snapshot
+    return None
+
+
+def close_chrome_task_session(
+    session: ChromeTaskSession,
+    *,
+    log_step: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    def emit(message: str) -> None:
+        if log_step is not None:
+            log_step(message)
+
+    binding = session.binding
+    if binding is not None:
+        try:
+            snapshot = _find_snapshot_for_binding(binding, session.app_name)
+            if snapshot is None:
+                emit("本轮绑定窗口已不存在，视为已收尾")
+                return {
+                    "ok": True,
+                    "skipped": False,
+                    "reason": "binding_missing",
+                    "strategy": "binding",
+                    "closed_window_ids": [],
+                    "remaining_window_ids": [],
+                    "closed_targets": [],
+                    "remaining_targets": [],
+                    "binding_window_id": binding.get("window_id"),
+                }
+            if not _binding_matches_snapshot(binding, snapshot):
+                emit("本轮绑定窗口已偏离目标页或疑似被用户接管，本轮不强关")
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "ownership_lost",
+                    "strategy": "binding",
+                    "closed_window_ids": [],
+                    "remaining_window_ids": [],
+                    "closed_targets": [],
+                    "remaining_targets": [_snapshot_identity(snapshot)],
+                    "binding_window_id": binding.get("window_id"),
+                }
+            raise_window(snapshot)
+            close_front_window_via_ax(session.app_name)
+            emit(f"已关闭本轮绑定窗口：{binding.get('binding_target') or _snapshot_identity(snapshot)}")
+            return {
+                "ok": True,
+                "skipped": False,
+                "reason": "",
+                "strategy": "binding",
+                "closed_window_ids": [],
+                "remaining_window_ids": [],
+                "closed_targets": [binding.get("binding_target") or _snapshot_identity(snapshot)],
+                "remaining_targets": [],
+                "binding_window_id": binding.get("window_id"),
+            }
+        except Exception as exc:
+            emit(f"本轮绑定窗口关闭失败，回退到窗口差异兜底：{exc}")
+            fallback = close_new_windows_for_url_ax(
+                session.previous_window_ids,
+                target_url_contains=session.target_url_contains,
+                log_step=log_step,
+                app_name=session.app_name,
+            )
+            fallback["strategy"] = "window_diff_fallback"
+            fallback["binding_window_id"] = binding.get("window_id")
+            return fallback
+
+    fallback = close_new_windows_for_url_ax(
+        session.previous_window_ids,
+        target_url_contains=session.target_url_contains,
+        log_step=log_step,
+        app_name=session.app_name,
+    )
+    fallback["strategy"] = "window_diff"
+    fallback["binding_window_id"] = None
+    return fallback
+
+
+def close_new_windows_for_url_ax(
+    previous_window_keys: set[tuple[str, str]] | None,
+    *,
+    target_url_contains: str,
+    log_step: Callable[[str], None] | None = None,
+    app_name: str = CHROME_APP_NAME,
+) -> dict[str, Any]:
+    def emit(message: str) -> None:
+        if log_step is not None:
+            log_step(message)
+
+    if previous_window_keys is None:
+        emit("任务前窗口快照缺失，本轮不做盲关，避免误关用户原窗口")
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "missing_previous_snapshot",
+            "closed_window_ids": [],
+            "remaining_window_ids": [],
+            "closed_targets": [],
+            "remaining_targets": [],
+        }
+
+    last_error: Exception | None = None
+    closed_targets: list[str] = []
+    remaining_targets: list[str] = []
+    try:
+        current_snapshots = list_window_snapshots(app_name)
+        candidates = [
+            snapshot
+            for snapshot in current_snapshots
+            if _snapshot_signature(snapshot) not in previous_window_keys
+            and target_url_contains in str(snapshot.get("active_url", ""))
+        ]
+        for snapshot in reversed(candidates):
+            raise_window(snapshot)
+            close_front_window_via_ax(app_name)
+            closed_targets.append(_snapshot_identity(snapshot))
+            emit(f"已关闭本轮任务窗口：{_snapshot_identity(snapshot)}")
+
+        current_snapshots = list_window_snapshots(app_name)
+        remaining_targets = [
+            _snapshot_identity(snapshot)
+            for snapshot in current_snapshots
+            if _snapshot_signature(snapshot) not in previous_window_keys
+            and target_url_contains in str(snapshot.get("active_url", ""))
+        ]
+        if not remaining_targets:
+            return {
+                "ok": True,
+                "skipped": False,
+                "reason": "",
+                "closed_window_ids": [],
+                "remaining_window_ids": [],
+                "closed_targets": closed_targets,
+                "remaining_targets": [],
+            }
+    except Exception as exc:
+        last_error = exc
+        current_snapshots = []
+        try:
+            current_snapshots = list_window_snapshots(app_name)
+        except Exception:
+            current_snapshots = []
+        remaining_targets = [
+            _snapshot_identity(snapshot)
+            for snapshot in current_snapshots
+            if _snapshot_signature(snapshot) not in previous_window_keys
+            and target_url_contains in str(snapshot.get("active_url", ""))
+        ]
+
+    detail = ""
+    if remaining_targets:
+        detail = f"，仍残留窗口: {remaining_targets}"
+    emit(f"任务窗口收尾关闭失败，忽略：{last_error}{detail}")
+    return {
+        "ok": False,
+        "skipped": False,
+        "reason": "close_failed",
+        "closed_window_ids": [],
+        "remaining_window_ids": [],
+        "closed_targets": closed_targets,
+        "remaining_targets": remaining_targets,
+        "error": str(last_error) if last_error else "",
+    }
 
 
 def close_new_windows_for_url(
