@@ -460,12 +460,29 @@ def _snapshot_signature(snapshot: dict[str, Any]) -> tuple[str, str]:
     )
 
 
-def snapshot_window_keys_optional(app_name: str = CHROME_APP_NAME) -> set[tuple[str, str]] | None:
+def _previous_signature_count(
+    previous_signatures: dict[tuple[str, str], int] | set[tuple[str, str]] | None,
+    signature: tuple[str, str],
+) -> int | None:
+    if previous_signatures is None:
+        return None
+    if isinstance(previous_signatures, dict):
+        return int(previous_signatures.get(signature, 0))
+    return 1 if signature in previous_signatures else 0
+
+
+def snapshot_window_signature_counts_optional(app_name: str = CHROME_APP_NAME) -> dict[tuple[str, str], int] | None:
     try:
         snapshots = list_window_snapshots(app_name)
     except Exception:
         return None
-    return {_snapshot_signature(snapshot) for snapshot in snapshots if any(_snapshot_signature(snapshot))}
+    counts: dict[tuple[str, str], int] = {}
+    for snapshot in snapshots:
+        signature = _snapshot_signature(snapshot)
+        if not any(signature):
+            continue
+        counts[signature] = counts.get(signature, 0) + 1
+    return counts
 
 
 def start_chrome_task_session(
@@ -475,7 +492,7 @@ def start_chrome_task_session(
 ) -> ChromeTaskSession:
     return ChromeTaskSession(
         target_url_contains=target_url_contains,
-        previous_window_ids=snapshot_window_keys_optional(app_name),
+        previous_window_ids=snapshot_window_signature_counts_optional(app_name),
         app_name=app_name,
     )
 
@@ -502,32 +519,25 @@ def bind_chrome_task_session(
         emit(f"读取窗口快照失败，暂不绑定本轮窗口：{exc}")
         return session
 
-    candidates = [
-        item
+    current_signature = _snapshot_signature(snapshot)
+    if not any(current_signature):
+        emit("当前窗口缺少稳定签名，收尾时将回退到窗口差异兜底")
+        return session
+    previous_count = _previous_signature_count(previous_window_ids, current_signature)
+    if previous_count is None:
+        emit("任务前窗口快照缺失，无法稳定绑定本轮新开窗口，收尾时将回退到窗口差异兜底")
+        return session
+    current_count = sum(
+        1
         for item in snapshots
-        if _snapshot_signature(item) not in previous_window_ids
+        if _snapshot_signature(item) == current_signature
         and session.target_url_contains in str(item.get("active_url", ""))
-    ]
-    snapshot_title = str(snapshot.get("window_title", "") or "").strip()
-    direct_match = next(
-        (
-            item
-            for item in candidates
-            if _snapshot_signature(item) == _snapshot_signature(snapshot)
-        ),
-        None,
     )
-    if direct_match is not None:
-        candidates = [direct_match]
-    elif snapshot_title:
-        titled = [item for item in candidates if str(item.get("window_title", "")).strip() == snapshot_title]
-        if len(titled) == 1:
-            candidates = titled
-    if len(candidates) != 1:
+    if current_count <= previous_count:
         emit("未能唯一绑定本轮新开窗口，收尾时将回退到窗口差异兜底")
         return session
 
-    candidate = candidates[0]
+    candidate = snapshot
     session.binding = {
         "window_id": None,
         "pid": int(candidate.get("pid", 0) or 0),
@@ -536,7 +546,9 @@ def bind_chrome_task_session(
         "active_url": str(candidate.get("active_url", "") or ""),
         "target_url_contains": session.target_url_contains,
         "title_hint": title_hint.strip(),
-        "signature": _snapshot_signature(candidate),
+        "signature": current_signature,
+        "baseline_signature_count": previous_count,
+        "expected_close_count": max(current_count - previous_count, 1),
         "binding_target": _snapshot_identity(candidate),
     }
     emit(f"已绑定本轮任务窗口：{session.binding['binding_target']}")
@@ -602,9 +614,21 @@ def close_chrome_task_session(
                     "remaining_targets": [_snapshot_identity(snapshot)],
                     "binding_window_id": binding.get("window_id"),
                 }
-            raise_window(snapshot)
-            close_front_window_via_ax(session.app_name)
-            emit(f"已关闭本轮绑定窗口：{binding.get('binding_target') or _snapshot_identity(snapshot)}")
+            signature = tuple(binding.get("signature", ("", "")))
+            baseline_count = int(binding.get("baseline_signature_count", 0) or 0)
+            expected_close_count = int(binding.get("expected_close_count", 1) or 1)
+            matching_snapshots = [
+                item
+                for item in list_window_snapshots(session.app_name)
+                if _snapshot_signature(item) == signature
+            ]
+            close_count = max(len(matching_snapshots) - baseline_count, expected_close_count)
+            closed_targets: list[str] = []
+            for target_snapshot in matching_snapshots[:close_count]:
+                raise_window(target_snapshot)
+                close_front_window_via_ax(session.app_name)
+                closed_targets.append(_snapshot_identity(target_snapshot))
+            emit(f"已关闭本轮绑定窗口：{', '.join(closed_targets) if closed_targets else binding.get('binding_target', '')}")
             return {
                 "ok": True,
                 "skipped": False,
@@ -612,7 +636,7 @@ def close_chrome_task_session(
                 "strategy": "binding",
                 "closed_window_ids": [],
                 "remaining_window_ids": [],
-                "closed_targets": [binding.get("binding_target") or _snapshot_identity(snapshot)],
+                "closed_targets": closed_targets,
                 "remaining_targets": [],
                 "binding_window_id": binding.get("window_id"),
             }
@@ -640,7 +664,7 @@ def close_chrome_task_session(
 
 
 def close_new_windows_for_url_ax(
-    previous_window_keys: set[tuple[str, str]] | None,
+    previous_window_keys: dict[tuple[str, str], int] | set[tuple[str, str]] | None,
     *,
     target_url_contains: str,
     log_step: Callable[[str], None] | None = None,
@@ -667,13 +691,25 @@ def close_new_windows_for_url_ax(
     remaining_targets: list[str] = []
     try:
         current_snapshots = list_window_snapshots(app_name)
-        candidates = [
+        matching_snapshots = [
             snapshot
             for snapshot in current_snapshots
-            if _snapshot_signature(snapshot) not in previous_window_keys
-            and target_url_contains in str(snapshot.get("active_url", ""))
+            if target_url_contains in str(snapshot.get("active_url", ""))
         ]
-        for snapshot in reversed(candidates):
+        candidates: list[dict[str, Any]] = []
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for snapshot in matching_snapshots:
+            grouped.setdefault(_snapshot_signature(snapshot), []).append(snapshot)
+        for signature, items in grouped.items():
+            baseline_count = _previous_signature_count(previous_window_keys, signature)
+            if baseline_count is None:
+                continue
+            extra_count = max(len(items) - baseline_count, 0)
+            if extra_count <= 0:
+                continue
+            candidates.extend(items[:extra_count])
+
+        for snapshot in candidates:
             raise_window(snapshot)
             close_front_window_via_ax(app_name)
             closed_targets.append(_snapshot_identity(snapshot))
@@ -683,8 +719,14 @@ def close_new_windows_for_url_ax(
         remaining_targets = [
             _snapshot_identity(snapshot)
             for snapshot in current_snapshots
-            if _snapshot_signature(snapshot) not in previous_window_keys
-            and target_url_contains in str(snapshot.get("active_url", ""))
+            if target_url_contains in str(snapshot.get("active_url", ""))
+            and (len(
+                [
+                    item
+                    for item in current_snapshots
+                    if _snapshot_signature(item) == _snapshot_signature(snapshot)
+                ]
+            ) > (_previous_signature_count(previous_window_keys, _snapshot_signature(snapshot)) or 0))
         ]
         if not remaining_targets:
             return {
@@ -706,8 +748,14 @@ def close_new_windows_for_url_ax(
         remaining_targets = [
             _snapshot_identity(snapshot)
             for snapshot in current_snapshots
-            if _snapshot_signature(snapshot) not in previous_window_keys
-            and target_url_contains in str(snapshot.get("active_url", ""))
+            if target_url_contains in str(snapshot.get("active_url", ""))
+            and (len(
+                [
+                    item
+                    for item in current_snapshots
+                    if _snapshot_signature(item) == _snapshot_signature(snapshot)
+                ]
+            ) > (_previous_signature_count(previous_window_keys, _snapshot_signature(snapshot)) or 0))
         ]
 
     detail = ""
