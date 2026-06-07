@@ -2137,6 +2137,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
         )
         self.assertIn("抱树的koala小姐", store_names)
         self.assertIn("考拉小姐慢慢来", store_names)
+        self.assertIn("朝仓里服饰", store_names)
 
         for path, fragment in [
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),
