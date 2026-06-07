@@ -157,6 +157,8 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 
 当前工作区已经新增“好评表缺失 SKU 补齐”的正式能力，对应脚本是 `scripts/fill_feishu_order_skus.py`。
 
+自动任务正式驱动另行固定为 `scripts/run_sku_fill_auto.py`，但它只负责自动编排，底层查单和回写口径仍然继续复用 `fill_feishu_order_skus.py`，不会改“哪些订单该填 SKU”的正式标准。
+
 这项能力的正式口径固定是三段式：
 
 ```text
@@ -178,13 +180,18 @@ python3 scripts/xhs_qianfan_access.py open --store "考拉小姐慢慢来" --pag
 - 搜索之间不能使用固定时间间隔，必须保持不规则停顿，避免形成明显的机器节奏
 - 由于 Chrome 正在使用中的真实资料会被浏览器锁住，这条链路默认继续复用你当前正在用的 Chrome 资料和页面状态执行，不另外复制一套长期资料
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我把好评表里的订单 SKU 补齐”或类似意思，助手应直接按这套流程执行，不要把命令行甩给你
+- 自动任务模式下，SKU 仍然继续按“`订单号` 非空且 `SKU` 为空”找单，不额外叠加别的业务条件；手动触发和自动触发共用同一套查单标准
+- 自动任务模式下，如果 SKU 全部成功回写，就不额外发通知；只在失败时通知，而且会写清楚失败总条数和店铺分布
+- 自动任务模式下，如果主跑失败，`14:20` 补跑会把 SKU 也一起纳入“谁失败补谁”的统一编排；手动三段式用法继续保留，不受影响
 
 ## 飞书已上评同步
 
 当前工作区已经新增“好评表已上评自动同步”能力，对应脚本是 `scripts/sync_feishu_review_status.py`。
-正式主跑/补跑驱动固定走：
+正式总编排 / 主跑 / 补跑驱动固定走：
 
 ```bash
+python3 scripts/run_review_daily_ops.py --mode main
+python3 scripts/run_review_daily_ops.py --mode retry
 python3 scripts/run_review_status_sync.py --mode main
 python3 scripts/run_review_status_sync.py --mode retry
 bash scripts/install_review_status_launchagent.sh
@@ -206,8 +213,10 @@ bash scripts/install_review_status_launchagent.sh
 - 默认只处理飞书表里的 `已上评` 字段，不在千帆后台做任何写操作
 - 导出文件默认先到桌面找，桌面没有新的，再去 `Downloads` 找
 - 导出文件列名口径固定按 `订单id` 匹配飞书 `订单号`
-- 定时任务默认按 `14:00` 主跑；只有主跑失败时，`14:20` 才会自动补跑一次。正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
+- 定时任务默认按 `14:00` 主跑；统一总编排会先跑漏上评，再跑 SKU 自动填写；只有主跑失败时，`14:20` 才会自动补跑失败的子任务。正式安装入口固定是 `bash scripts/install_review_status_launchagent.sh`
 - 如果主跑只是查到漏上评，会直接通知结果，不再为了漏上评再补跑
+- 如果本轮既有漏上评通知又有 SKU 失败通知，总编排会优先合并成一条 push，标题固定为 `好评漏上评&填sku_自动任务`
+- 如果本轮只有 SKU 失败通知，标题固定为 `好评sku填写_自动任务`
 - 本机定时任务固定锁定到带 `pyautogui` 的 Python 3.11，并在安装时把 `PATH` 和 `REVIEW_STATUS_PYTHON_BIN` 一起写进 `launchd` 配置，避免 macOS 默认系统 Python 缺依赖导致静默失败
 - 这里保留 Python 3.11 + `pyautogui` 不是因为它还是主链路，而是为了鼠标兜底可随时接管
 - 这条链路即使从 `current` 正式入口运行，计划文件、状态文件和导出缓存也固定写回工作区根目录共享 `runtime/`，不在发布快照里另起一套 `current/runtime`
@@ -223,6 +232,7 @@ bash scripts/install_review_status_launchagent.sh
 - 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
 - 涉及千帆后台时，依然继续复用 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 里的极度保守口径
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我同步已上评”或类似意思，助手应直接按这套流程执行，不要再临时发明别的链路
+- 现在这条本机自动链路的正式入口已经上提到 `scripts/run_review_daily_ops.py`：它统一负责漏上评与 SKU 自动填写的主跑、补跑、通知合并和状态归档；`scripts/run_review_status_sync.py` 继续只负责漏上评子任务本身
 
 ## 改名后的回滚口径
 

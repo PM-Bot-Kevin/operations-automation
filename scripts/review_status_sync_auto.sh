@@ -13,4 +13,4 @@ if [[ -z "$PYTHON_BIN" ]]; then
   fi
 fi
 
-exec "$PYTHON_BIN" "$SCRIPT_DIR/run_review_status_sync.py" --mode main
+exec "$PYTHON_BIN" "$SCRIPT_DIR/run_review_daily_ops.py" --mode main

@@ -69,6 +69,14 @@
       "path": "scripts/run_review_status_sync.py"
     },
     {
+      "label": "好评 SKU 自动填写驱动脚本",
+      "path": "scripts/run_sku_fill_auto.py"
+    },
+    {
+      "label": "好评自动任务总编排脚本",
+      "path": "scripts/run_review_daily_ops.py"
+    },
+    {
       "label": "好评已上评同步主跑脚本",
       "path": "scripts/review_status_sync_auto.sh"
     },

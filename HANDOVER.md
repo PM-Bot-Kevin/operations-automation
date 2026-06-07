@@ -48,7 +48,9 @@ bash scripts/install_backup_launchagent.sh
 - 这项能力还必须遵守风控约束：在用户浏览器里只做最小操作，尽量减少刷新、重复点击和无关页面跳转，避免形成明显的机械化操作轨迹。
 - 千帆相关需求的极度保守执行规则已经单独固化到 `config/xhs_qianfan_guardrails.json` 和 `docs/xhs_qianfan_safety.md`，后续默认直接复用，不要每次重新定策略。
 - 当前仓库还新增“飞书好评表缺失 SKU 补齐”能力，对应脚本是 `scripts/fill_feishu_order_skus.py`。
+- 这条 SKU 能力现在另外补了一层自动驱动 `scripts/run_sku_fill_auto.py`，只负责自动任务编排；手动 `plan / query / apply` 入口继续保留，不受影响。
 - 正式流程固定分成两段：先 `plan` 拉出缺 SKU 订单和店铺资料映射，再由助手在千帆后台只读慢查真实完整规格，最后用 `apply` 回写飞书。
+- 自动任务模式下，不允许擅自改“哪些订单该填 SKU”的正式标准；继续按 `订单号` 非空且 `SKU` 为空找单。
 - 这条 SKU 链路统一走订单查询页 `https://ark.xiaohongshu.com/app-order/order/query`，不同店铺只切 Chrome profile，不再按店铺拆不同页面流程。
 - 店铺和 Chrome profile 的正式映射已经单独固化到 `config/xhs_order_query_profiles.json`；后续新增店铺优先补配置，不要继续往主脚本里堆店铺判断。
 - 真实规格写回前，默认先按 `config/xhs_order_query_profiles.json` 里的标准化映射转成正式 SKU；没命中映射时才保留原始规格，避免静默写错。
@@ -58,8 +60,9 @@ bash scripts/install_backup_launchagent.sh
 - 这项能力的千帆侧执行必须继续遵守风控约束：只允许串行、单店分批、低频查询，搜索之间不能用固定时间间隔，必须保持不规则停顿。
 - 极度保守口径下，默认一轮不超过 5 单；一轮结束后必须停一下，再决定是否继续下一轮。
 - 由于 Chrome 正在使用中的真实资料会有锁，后续不要强行用独立自动化进程抢占同一套 live profile；优先复用用户当前浏览器会话和页面状态。
+- SKU 自动任务如果全部成功，就不单独通知；如果有失败，通知必须写失败总条数和店铺分布。
 - 当前仓库还新增“飞书好评表已上评同步”能力，对应脚本是 `scripts/sync_feishu_review_status.py`。
-- 这条能力现在已经迁到本机正式定时链路：主驱动是 `scripts/run_review_status_sync.py`，安装入口固定是 `bash scripts/install_review_status_launchagent.sh`，不再依赖 Codex 心跳任务常驻。
+- 这条能力现在已经迁到本机正式定时链路：总编排主驱动是 `scripts/run_review_daily_ops.py`，漏上评子驱动是 `scripts/run_review_status_sync.py`，安装入口固定是 `bash scripts/install_review_status_launchagent.sh`，不再依赖 Codex 心跳任务常驻。
 - 这项能力固定先整理“上评日期早于今天且已上评未勾选”的订单，再按店铺去千帆评价管理页导出 CSV，最后按导出里的 `订单id` 回写飞书 `已上评`。
 - 这项能力默认不拿“逐单综合搜索订单号”做备用方案；导出链路跑不通就直接报错或通知，不要偷偷切到高频搜索。
 - 这项能力的正式交互主方案已经改成 `AX` 无鼠标控件操作：复用用户现有 Chrome 店铺资料打开评价页后，通过可访问性控件完成日期填写、搜索和“全部导出”，正常路径不抢鼠标。
@@ -67,8 +70,9 @@ bash scripts/install_backup_launchagent.sh
 - 点完“全部导出”后，正式链路会先给 `60` 秒确认下载是否真的开始；如果首轮明显没开始，会先关掉本轮页面，重新打开干净页面后再按 `AX` 重跑一轮。
 - 只有“首轮 AX 没开始导出 + 重开页面后再跑仍失败”时，才会降级到现有鼠标流兜底；因此 Python 3.11 和 `pyautogui` 现在是兜底依赖，不再是主链路依赖。
 - 导出文件默认先在桌面找，桌面没有新的再去 `Downloads` 找；接住后会另存为稳定文件名，避免被下一轮覆盖。
-- 定时任务口径固定为 14:00 主跑；只有主跑失败时，14:20 才补跑一次。
+- 定时任务口径固定为 14:00 主跑；总编排会先跑漏上评，再跑 SKU 自动填写；只有主跑失败时，14:20 才补跑失败子任务。
 - 如果主跑只是查到漏上评，会直接通知结果，不再为了漏上评再补跑。
+- 如果同一轮里既有漏上评结果又有 SKU 失败，总编排应优先合并成一条 push，标题固定 `好评漏上评&填sku_自动任务`；如果只有 SKU 失败，标题固定 `好评sku填写_自动任务`。
 - 这条本机定时链路固定锁定到带 `pyautogui` 的 Python 3.11；安装脚本会把 `PATH` 和 `REVIEW_STATUS_PYTHON_BIN` 一起写进 `launchd`，避免系统默认 Python 缺依赖导致任务一启动就失败。
 - 页面被关掉不影响这条定时任务，它会先复用对应店铺的 Chrome 资料重新打开评价管理页。
 - 这条任务不再默认假设“上一次打开的评价页窗口仍然存在”。后续维护时要按“窗口可能被用户手动关掉、切走、覆盖”来理解正式链路：每轮都必须自己重新找窗口、自己重开、自己重绑。

@@ -21,22 +21,22 @@ def resolve_workspace_root(code_root: Path) -> Path:
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = resolve_workspace_root(CODE_ROOT)
-SYNC_SCRIPT = CODE_ROOT / "scripts" / "sync_feishu_review_status.py"
-RUNTIME_DIR = (WORKSPACE_ROOT / "runtime" / "review_status_sync").resolve()
+FILL_SCRIPT = CODE_ROOT / "scripts" / "fill_feishu_order_skus.py"
+RUNTIME_DIR = (WORKSPACE_ROOT / "runtime" / "sku_fill_auto").resolve()
 PLAN_FILE = RUNTIME_DIR / "plan_latest.json"
 LATEST_STATUS_FILE = RUNTIME_DIR / "status_latest.json"
 LATEST_MAIN_STATUS_FILE = RUNTIME_DIR / "status_latest_main.json"
 LATEST_RETRY_STATUS_FILE = RUNTIME_DIR / "status_latest_retry.json"
 PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"
-NOTIFY_TITLE = "好评漏上评检查_自动任务"
+NOTIFY_TITLE = "好评sku填写_自动任务"
 
 
-class ReviewStatusRunError(RuntimeError):
+class SkuAutoRunError(RuntimeError):
     pass
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="飞书好评表已上评同步正式驱动脚本")
+    parser = argparse.ArgumentParser(description="飞书好评表 SKU 自动补齐正式驱动脚本")
     parser.add_argument("--mode", choices=("main", "retry"), default="main")
     return parser.parse_args()
 
@@ -45,7 +45,7 @@ def irregular_pause(min_seconds: float, max_seconds: float) -> None:
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 
-def run_json_command(args: list[str]) -> dict[str, Any]:
+def run_command(args: list[str]) -> subprocess.CompletedProcess[str]:
     completed = subprocess.run(
         args,
         cwd=CODE_ROOT,
@@ -55,22 +55,30 @@ def run_json_command(args: list[str]) -> dict[str, Any]:
     )
     if completed.stderr.strip():
         print(completed.stderr.rstrip(), file=sys.stderr, flush=True)
+    return completed
+
+
+def run_json_command(args: list[str]) -> dict[str, Any]:
+    completed = run_command(args)
     if completed.returncode != 0:
         message = completed.stderr.strip() or completed.stdout.strip() or "命令执行失败"
-        raise ReviewStatusRunError(message)
+        raise SkuAutoRunError(message)
     try:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ReviewStatusRunError(f"无法解析脚本输出：{completed.stdout[:400]}") from exc
+        raise SkuAutoRunError(f"无法解析脚本输出：{completed.stdout[:400]}") from exc
 
 
-def sanitize_store_name(value: str) -> str:
-    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
-    return safe.strip("_") or "store"
+def run_apply_command(args: list[str]) -> str:
+    completed = run_command(args)
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip() or "命令执行失败"
+        raise SkuAutoRunError(message)
+    return completed.stdout.strip()
 
 
 def notify(title: str, message: str) -> None:
-    if os.environ.get("REVIEW_STATUS_SUPPRESS_NOTIFY") == "1":
+    if os.environ.get("SKU_FILL_SUPPRESS_NOTIFY") == "1":
         return
     escaped_title = title.replace("\\", "\\\\").replace('"', '\\"')
     escaped_message = message.replace("\\", "\\\\").replace('"', '\\"')
@@ -113,33 +121,35 @@ def save_status(status: dict[str, Any]) -> None:
     LATEST_STATUS_FILE.write_text(payload, encoding="utf-8")
 
 
-def cleanup_export_files(export_payload: dict[str, Any] | None) -> None:
-    if not export_payload:
-        return
-    for key in ("saved_file", "source_file"):
-        raw_path = export_payload.get(key)
-        if not raw_path:
-            continue
-        path = Path(raw_path).expanduser()
-        if not path.is_absolute():
-            continue
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError:
-            continue
-
-
 def retryable_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [issue for issue in issues if issue["type"] != "missing_orders"]
+    return issues
+
+
+def should_run_scheduled_retry(today: str) -> bool:
+    latest_status = load_latest_status()
+    if not latest_status:
+        return False
+    if latest_status.get("today") != today:
+        return False
+    if latest_status.get("mode") != "main":
+        return False
+    issues = latest_status.get("issues", [])
+    if not isinstance(issues, list):
+        return False
+    return bool(retryable_issues(issues))
+
+
+def sanitize_store_name(value: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
+    return safe.strip("_") or "store"
 
 
 def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
     ok_count = 0
     for item in results:
-        export_payload = item.get("export") or {}
-        cleanup = export_payload.get("cleanup")
+        query_payload = item.get("query") or {}
+        cleanup = query_payload.get("cleanup")
         if not isinstance(cleanup, dict):
             continue
         if cleanup.get("ok"):
@@ -164,49 +174,25 @@ def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def should_run_scheduled_retry(today: str) -> bool:
-    latest_status = load_latest_status()
-    if not latest_status:
-        return False
-    if latest_status.get("today") != today:
-        return False
-    if latest_status.get("mode") != "main":
-        return False
-    issues = latest_status.get("issues", [])
-    if not isinstance(issues, list):
-        return False
-    return bool(retryable_issues(issues))
-
-
-def summarize_missing_issues(issues: list[dict[str, Any]]) -> str:
-    missing = [issue for issue in issues if issue["type"] == "missing_orders"]
-    total_missing = sum(int(issue.get("missing_count", 0)) for issue in missing)
-    store_parts = [f"{issue['store_name']}{issue['missing_count']}条" for issue in missing]
-    if not store_parts:
-        return ""
-    return f"漏上评{total_missing}条。{'；'.join(store_parts[:4])}。"
-
-
-def summarize_failed_issues(issues: list[dict[str, Any]]) -> str:
+def summarize_failed_issues(mode: str, issues: list[dict[str, Any]]) -> str:
     failed = retryable_issues(issues)
     if not failed:
         return ""
+    prefix = "SKU补跑失败" if mode == "retry" else "SKU填写失败"
     if any(issue["type"] == "plan_failed" for issue in failed):
-        return "检查失败。今天这轮没跑出来。"
-    store_parts = [f"{issue['store_name']}失败" for issue in failed]
-    return f"检查失败。{'；'.join(store_parts[:4])}。"
+        return f"{prefix}。今天这轮没跑出来。"
+    total_failed = sum(int(issue.get("failed_count", 0)) for issue in failed)
+    store_parts = [f"{issue['store_name']}{int(issue.get('failed_count', 0))}条" for issue in failed]
+    return f"{prefix}{total_failed}条。{'；'.join(store_parts[:4])}。"
 
 
 def build_notification_message(mode: str, issues: list[dict[str, Any]]) -> str:
-    failed = retryable_issues(issues)
-    missing = [issue for issue in issues if issue["type"] == "missing_orders"]
-    if failed:
-        if mode == "retry":
-            return summarize_failed_issues(failed).replace("检查失败。", "补查失败。", 1)
-        return summarize_failed_issues(failed)
-    if missing:
-        return summarize_missing_issues(missing)
-    return ""
+    return summarize_failed_issues(mode, issues)
+
+
+def build_store_query_output_path(today: str, mode: str, store_name: str) -> Path:
+    filename = f"{today}_{mode}_{sanitize_store_name(store_name)}_updates.json"
+    return RUNTIME_DIR / "queries" / filename
 
 
 def main() -> int:
@@ -222,31 +208,33 @@ def main() -> int:
         plan = run_json_command(
             [
                 PYTHON_BIN,
-                str(SYNC_SCRIPT),
+                str(FILL_SCRIPT),
                 "plan",
+                "帮我把好评表里的订单SKU补齐",
                 "--format",
                 "json",
                 "--output",
                 str(PLAN_FILE),
             ]
         )
-    except ReviewStatusRunError as exc:
+    except SkuAutoRunError as exc:
         status = {
             "today": today,
             "mode": args.mode,
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "failed",
-            "summary": {"pending_orders": 0, "stores_involved": 0},
-            "issues": [{"type": "plan_failed", "store_name": "整体", "message": str(exc)}],
+            "summary": {"missing_sku_orders": 0, "stores_involved": 0, "updated_orders": 0, "failed_orders": 0},
+            "issues": [{"type": "plan_failed", "store_name": "整体", "failed_count": 0, "message": str(exc)}],
             "results": [],
         }
         save_status(status)
-        notify(NOTIFY_TITLE, "检查失败。今天这轮没跑出来。")
+        notify(NOTIFY_TITLE, build_notification_message(args.mode, status["issues"]))
         return 1
 
-    pending_orders = int(plan["summary"]["pending_orders"])
     stores = plan.get("stores", [])
+    summary = plan.get("summary", {})
+    pending_orders = int(summary.get("missing_sku_orders", 0))
     if pending_orders == 0 or not stores:
         status = {
             "today": today,
@@ -254,7 +242,12 @@ def main() -> int:
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "success",
-            "summary": plan["summary"],
+            "summary": {
+                "missing_sku_orders": pending_orders,
+                "stores_involved": int(summary.get("stores_involved", 0)),
+                "updated_orders": 0,
+                "failed_orders": 0,
+            },
             "cleanup": {"ok_count": 0, "warning_count": 0, "warnings": []},
             "issues": [],
             "results": [],
@@ -264,73 +257,116 @@ def main() -> int:
 
     results: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
+    updated_orders = 0
 
     for index, store in enumerate(stores):
-        store_name = store["store_name"]
+        store_name = str(store.get("store_name", "")).strip()
+        planned_orders = [str(item) for item in store.get("orders", [])]
+        planned_count = int(store.get("order_count", len(planned_orders)))
         if index > 0:
             irregular_pause(35, 90)
 
-        export_payload: dict[str, Any] | None = None
+        query_payload: dict[str, Any] | None = None
+        query_output_path = build_store_query_output_path(today, args.mode, store_name)
         try:
-            export_payload = run_json_command(
+            query_payload = run_json_command(
                 [
                     PYTHON_BIN,
-                    str(SYNC_SCRIPT),
-                    "export-store",
+                    str(FILL_SCRIPT),
+                    "query",
                     "--plan-file",
                     str(PLAN_FILE),
                     "--store",
                     store_name,
-                    "--format",
-                    "json",
+                    "--output",
+                    str(query_output_path),
                 ]
             )
+            updates = list(query_payload.get("updates", []))
+            updated_count = len(updates)
+            if updated_count <= 0:
+                issues.append(
+                    {
+                        "type": "store_failed",
+                        "stage": "query",
+                        "store_name": store_name,
+                        "failed_count": planned_count,
+                        "failed_orders": planned_orders,
+                        "message": "没有生成可回写的 SKU 结果。",
+                    }
+                )
+                results.append(
+                    {
+                        "store_name": store_name,
+                        "planned_count": planned_count,
+                        "query_output_file": str(query_output_path),
+                        "query": query_payload,
+                        "apply": None,
+                    }
+                )
+                continue
+
             irregular_pause(2, 5)
-            reconcile_payload = run_json_command(
+            run_apply_command(
                 [
                     PYTHON_BIN,
-                    str(SYNC_SCRIPT),
-                    "reconcile",
-                    "--plan-file",
-                    str(PLAN_FILE),
-                    "--store",
-                    store_name,
-                    "--export-file",
-                    export_payload["saved_file"],
-                    "--apply",
-                    "--format",
-                    "json",
+                    str(FILL_SCRIPT),
+                    "apply",
+                    "--input-file",
+                    str(query_output_path),
                 ]
+            )
+            updated_orders += updated_count
+            results.append(
+                {
+                    "store_name": store_name,
+                    "planned_count": planned_count,
+                    "updated_count": updated_count,
+                    "query_output_file": str(query_output_path),
+                    "query": query_payload,
+                    "apply": {
+                        "status": "success",
+                        "updated_count": updated_count,
+                    },
+                }
+            )
+        except SkuAutoRunError as exc:
+            failed_orders = planned_orders
+            failed_count = planned_count
+            stage = "query"
+            if query_payload is not None:
+                updates = list(query_payload.get("updates", []))
+                failed_orders = [str(item.get("order_no", "")).strip() for item in updates if item.get("order_no")]
+                failed_count = len(failed_orders) or planned_count
+                stage = "apply"
+            issues.append(
+                {
+                    "type": "store_failed",
+                    "stage": stage,
+                    "store_name": store_name,
+                    "failed_count": failed_count,
+                    "failed_orders": failed_orders,
+                    "message": str(exc),
+                }
             )
             results.append(
                 {
                     "store_name": store_name,
-                    "export": export_payload,
-                    "reconcile": reconcile_payload,
-                }
-            )
-            if reconcile_payload["missing_count"] > 0:
-                issues.append(
-                    {
-                        "type": "missing_orders",
-                        "store_name": store_name,
-                        "missing_count": reconcile_payload["missing_count"],
-                        "missing_orders": reconcile_payload["missing_orders"],
+                    "planned_count": planned_count,
+                    "query_output_file": str(query_output_path),
+                    "query": query_payload,
+                    "apply": {
+                        "status": "failed",
+                        "message": str(exc),
                     }
-                )
-        except ReviewStatusRunError as exc:
-            issues.append(
-                {
-                    "type": "store_failed",
-                    "store_name": store_name,
-                    "message": str(exc),
+                    if query_payload is not None
+                    else None,
                 }
             )
-        finally:
-            cleanup_export_files(export_payload)
 
     failed_issues = retryable_issues(issues)
     cleanup_summary = summarize_cleanup_results(results)
+    failed_orders_total = sum(int(issue.get("failed_count", 0)) for issue in failed_issues)
     status = {
         "today": today,
         "mode": args.mode,
@@ -341,18 +377,21 @@ def main() -> int:
             if failed_issues
             else ("success_with_cleanup_warning" if cleanup_summary["warning_count"] > 0 else "success")
         ),
-        "summary": plan["summary"],
+        "summary": {
+            "missing_sku_orders": pending_orders,
+            "stores_involved": int(summary.get("stores_involved", len(stores))),
+            "updated_orders": updated_orders,
+            "failed_orders": failed_orders_total,
+        },
         "cleanup": cleanup_summary,
         "issues": issues,
         "results": results,
     }
     save_status(status)
 
-    if issues:
-        message = build_notification_message(args.mode, issues)
-        if message:
-            notify(NOTIFY_TITLE, message)
-        return 1 if failed_issues else 0
+    if failed_issues:
+        notify(NOTIFY_TITLE, build_notification_message(args.mode, failed_issues))
+        return 1
     return 0
 
 

@@ -14,4 +14,4 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 export REVIEW_STATUS_SCHEDULED_RETRY=1
-exec "$PYTHON_BIN" "$SCRIPT_DIR/run_review_status_sync.py" --mode retry
+exec "$PYTHON_BIN" "$SCRIPT_DIR/run_review_daily_ops.py" --mode retry

@@ -96,7 +96,7 @@ launchctl bootstrap "$LAUNCH_DOMAIN" "$MAIN_PLIST"
 launchctl bootstrap "$LAUNCH_DOMAIN" "$CHECK_PLIST"
 
 cat <<EOF
-已安装好评已上评同步定时任务
+已安装好评漏上评检查 + SKU 自动填写定时任务
 - main: $MAIN_PLIST
 - check: $CHECK_PLIST
 - log dir: $LOG_DIR

@@ -24,6 +24,9 @@ EXPORT_IMAGES_SCRIPT = REPO_ROOT / "scripts" / "export_feishu_order_images.py"
 QIANFAN_ACCESS_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_access.py"
 FILL_SKUS_SCRIPT = REPO_ROOT / "scripts" / "fill_feishu_order_skus.py"
 SYNC_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
+RUN_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+RUN_SKU_AUTO_SCRIPT = REPO_ROOT / "scripts" / "run_sku_fill_auto.py"
+RUN_REVIEW_DAILY_OPS_SCRIPT = REPO_ROOT / "scripts" / "run_review_daily_ops.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 ORDER_PAGE_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_order_page.py"
@@ -1594,11 +1597,14 @@ print(json.dumps(payload, ensure_ascii=False))
             self.assertIn("/Library/Frameworks/Python.framework/Versions/3.11/bin/python3", content)
             self.assertIn("REVIEW_STATUS_PYTHON_BIN", content)
             self.assertIn('exec "$PYTHON_BIN"', content)
+            self.assertIn("run_review_daily_ops.py", content)
         self.assertIn("REVIEW_STATUS_SCHEDULED_RETRY=1", check_script)
 
-        run_script = (REPO_ROOT / "scripts" / "run_review_status_sync.py").read_text(encoding="utf-8")
+        run_script = RUN_REVIEW_STATUS_SCRIPT.read_text(encoding="utf-8")
         self.assertIn('PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"', run_script)
         self.assertNotIn('[\n                "python3",', run_script)
+        daily_ops_script = RUN_REVIEW_DAILY_OPS_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('PYTHON_BIN = os.environ.get("REVIEW_STATUS_PYTHON_BIN") or sys.executable or "python3"', daily_ops_script)
         self.assertIn("<key>EnvironmentVariables</key>", install_script)
         self.assertIn("<key>REVIEW_STATUS_PYTHON_BIN</key>", install_script)
         self.assertIn("<key>PATH</key>", install_script)
@@ -1607,7 +1613,7 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertIn('launchctl bootstrap "$LAUNCH_DOMAIN" "$CHECK_PLIST"', install_script)
 
     def test_run_review_status_notification_messages_and_retry_gate(self) -> None:
-        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        script = RUN_REVIEW_STATUS_SCRIPT
         spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -1670,7 +1676,7 @@ print(json.dumps(payload, ensure_ascii=False))
                 module.LATEST_STATUS_FILE = original
 
     def test_run_review_status_save_status_separates_main_and_retry_files(self) -> None:
-        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        script = RUN_REVIEW_STATUS_SCRIPT
         spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -1723,7 +1729,7 @@ print(json.dumps(payload, ensure_ascii=False))
                 module.LATEST_RETRY_STATUS_FILE = original_latest_retry_status
 
     def test_run_review_status_resolves_workspace_root_from_release_copy(self) -> None:
-        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        script = RUN_REVIEW_STATUS_SCRIPT
         spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -1736,7 +1742,7 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertEqual(module.resolve_workspace_root(workspace_root), workspace_root)
 
     def test_run_review_status_summarizes_cleanup_warnings(self) -> None:
-        script = REPO_ROOT / "scripts" / "run_review_status_sync.py"
+        script = RUN_REVIEW_STATUS_SCRIPT
         spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -1777,6 +1783,222 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertEqual(summary["warning_count"], 1)
         self.assertEqual(summary["warnings"][0]["store_name"], "考拉小姐慢慢来")
         self.assertEqual(summary["warnings"][0]["reason"], "ownership_lost")
+
+    def test_run_sku_fill_auto_notification_messages_and_retry_gate(self) -> None:
+        script = RUN_SKU_AUTO_SCRIPT
+        spec = importlib.util.spec_from_file_location("run_sku_fill_auto", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        self.assertEqual(
+            module.build_notification_message(
+                "main",
+                [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 2}],
+            ),
+            "SKU填写失败2条。考拉小姐慢慢来2条。",
+        )
+        self.assertEqual(
+            module.build_notification_message(
+                "retry",
+                [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 1}],
+            ),
+            "SKU补跑失败1条。考拉小姐慢慢来1条。",
+        )
+        self.assertEqual(
+            module.build_notification_message(
+                "main",
+                [{"type": "plan_failed", "store_name": "整体", "failed_count": 0}],
+            ),
+            "SKU填写失败。今天这轮没跑出来。",
+        )
+
+        with tempfile.TemporaryDirectory(prefix="sku-auto-gate-") as temp_dir:
+            status_file = Path(temp_dir) / "status_latest.json"
+            original = module.LATEST_STATUS_FILE
+            module.LATEST_STATUS_FILE = status_file
+            try:
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-06-07",
+                            "mode": "main",
+                            "issues": [],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertFalse(module.should_run_scheduled_retry("2026-06-07"))
+
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-06-07",
+                            "mode": "main",
+                            "issues": [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 1}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertTrue(module.should_run_scheduled_retry("2026-06-07"))
+            finally:
+                module.LATEST_STATUS_FILE = original
+
+    def test_run_sku_fill_auto_save_status_separates_main_and_retry_files(self) -> None:
+        script = RUN_SKU_AUTO_SCRIPT
+        spec = importlib.util.spec_from_file_location("run_sku_fill_auto", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="sku-auto-save-") as temp_dir:
+            runtime_dir = Path(temp_dir)
+            original_runtime_dir = module.RUNTIME_DIR
+            original_latest_status = module.LATEST_STATUS_FILE
+            original_latest_main_status = module.LATEST_MAIN_STATUS_FILE
+            original_latest_retry_status = module.LATEST_RETRY_STATUS_FILE
+            module.RUNTIME_DIR = runtime_dir
+            module.LATEST_STATUS_FILE = runtime_dir / "status_latest.json"
+            module.LATEST_MAIN_STATUS_FILE = runtime_dir / "status_latest_main.json"
+            module.LATEST_RETRY_STATUS_FILE = runtime_dir / "status_latest_retry.json"
+            try:
+                main_status = {
+                    "today": "2026-06-07",
+                    "mode": "main",
+                    "issues": [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 2}],
+                }
+                retry_status = {
+                    "today": "2026-06-07",
+                    "mode": "retry",
+                    "issues": [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 1}],
+                }
+
+                module.save_status(main_status)
+                module.save_status(retry_status)
+
+                self.assertTrue((runtime_dir / "status_2026-06-07_main.json").exists())
+                self.assertTrue((runtime_dir / "status_2026-06-07_retry.json").exists())
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest_main.json").read_text(encoding="utf-8"))["mode"],
+                    "main",
+                )
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest_retry.json").read_text(encoding="utf-8"))["mode"],
+                    "retry",
+                )
+                self.assertEqual(
+                    json.loads((runtime_dir / "status_latest.json").read_text(encoding="utf-8"))["mode"],
+                    "retry",
+                )
+            finally:
+                module.RUNTIME_DIR = original_runtime_dir
+                module.LATEST_STATUS_FILE = original_latest_status
+                module.LATEST_MAIN_STATUS_FILE = original_latest_main_status
+                module.LATEST_RETRY_STATUS_FILE = original_latest_retry_status
+
+    def test_run_review_daily_ops_merges_notifications_and_retry_plan(self) -> None:
+        script = RUN_REVIEW_DAILY_OPS_SCRIPT
+        spec = importlib.util.spec_from_file_location("run_review_daily_ops", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        review_status = {
+            "status": "success",
+            "issues": [{"type": "missing_orders", "store_name": "抱树的koala小姐", "missing_count": 2}],
+        }
+        sku_status = {
+            "status": "failed",
+            "issues": [{"type": "store_failed", "store_name": "考拉小姐慢慢来", "failed_count": 3}],
+        }
+        payload = module.build_notification_payload("main", review_status, sku_status)
+        self.assertEqual(payload["title"], "好评漏上评&填sku_自动任务")
+        self.assertEqual(payload["message"], "漏上评2条。抱树的koala小姐2条。SKU填写失败3条。考拉小姐慢慢来3条。")
+
+        retry_plan = module.build_retry_plan_from_statuses(
+            {
+                "review_status": review_status,
+                "sku_fill": sku_status,
+            }
+        )
+        self.assertEqual(
+            retry_plan,
+            {
+                "review_status": False,
+                "sku_fill": True,
+            },
+        )
+
+    def test_run_review_daily_ops_retry_gate_and_status_save(self) -> None:
+        script = RUN_REVIEW_DAILY_OPS_SCRIPT
+        spec = importlib.util.spec_from_file_location("run_review_daily_ops", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory(prefix="daily-ops-save-") as temp_dir:
+            runtime_dir = Path(temp_dir)
+            original_runtime_dir = module.RUNTIME_DIR
+            original_latest_status = module.LATEST_STATUS_FILE
+            original_latest_main_status = module.LATEST_MAIN_STATUS_FILE
+            original_latest_retry_status = module.LATEST_RETRY_STATUS_FILE
+            module.RUNTIME_DIR = runtime_dir
+            module.LATEST_STATUS_FILE = runtime_dir / "status_latest.json"
+            module.LATEST_MAIN_STATUS_FILE = runtime_dir / "status_latest_main.json"
+            module.LATEST_RETRY_STATUS_FILE = runtime_dir / "status_latest_retry.json"
+            try:
+                status_file = module.LATEST_STATUS_FILE
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-06-07",
+                            "mode": "main",
+                            "retry_plan": {"review_status": False, "sku_fill": False},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertFalse(module.should_run_scheduled_retry("2026-06-07"))
+
+                status_file.write_text(
+                    json.dumps(
+                        {
+                            "today": "2026-06-07",
+                            "mode": "main",
+                            "retry_plan": {"review_status": True, "sku_fill": False},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertTrue(module.should_run_scheduled_retry("2026-06-07"))
+
+                main_status = {
+                    "today": "2026-06-07",
+                    "mode": "main",
+                    "retry_plan": {"review_status": True, "sku_fill": True},
+                }
+                retry_status = {
+                    "today": "2026-06-07",
+                    "mode": "retry",
+                    "retry_plan": {"review_status": False, "sku_fill": False},
+                }
+                module.save_status(main_status)
+                module.save_status(retry_status)
+                self.assertTrue((runtime_dir / "status_2026-06-07_main.json").exists())
+                self.assertTrue((runtime_dir / "status_2026-06-07_retry.json").exists())
+            finally:
+                module.RUNTIME_DIR = original_runtime_dir
+                module.LATEST_STATUS_FILE = original_latest_status
+                module.LATEST_MAIN_STATUS_FILE = original_latest_main_status
+                module.LATEST_RETRY_STATUS_FILE = original_latest_retry_status
 
     def test_sync_review_status_resolves_workspace_root_from_release_copy(self) -> None:
         script = REPO_ROOT / "scripts" / "sync_feishu_review_status.py"
