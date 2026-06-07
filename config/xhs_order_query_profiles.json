@@ -22,5 +22,18 @@
       "藏青色 加长 (165cm以上) S 80-100斤": "藏青-加长;S"
     }
   },
-  "stores": []
+  "stores": [
+    {
+      "store_name": "抱树的koala小姐",
+      "profile_directory": "Profile 32",
+      "profile_name": "抱树的koala小姐",
+      "enabled": true
+    },
+    {
+      "store_name": "考拉小姐慢慢来",
+      "profile_directory": "Profile 36",
+      "profile_name": "考拉小姐慢慢来",
+      "enabled": true
+    }
+  ]
 }

@@ -2125,6 +2125,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
         self.assertEqual(config["cross_workspace"]["dependencies"], [])
         guardrails = json.loads(QIANFAN_GUARDRAILS_PATH.read_text(encoding="utf-8"))
         store_profile_config = json.loads((REPO_ROOT / "config" / "xhs_order_query_profiles.json").read_text(encoding="utf-8"))
+        store_names = {item["store_name"] for item in store_profile_config["stores"]}
         self.assertEqual(guardrails["execution_defaults"]["max_orders_per_round"], 5)
         self.assertTrue(guardrails["execution_defaults"]["single_store_only"])
         self.assertTrue(guardrails["execution_defaults"]["fixed_interval_forbidden"])
@@ -2134,6 +2135,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             store_profile_config["order_query_page_url"],
             "https://ark.xiaohongshu.com/app-order/order/query",
         )
+        self.assertIn("抱树的koala小姐", store_names)
+        self.assertIn("考拉小姐慢慢来", store_names)
 
         for path, fragment in [
             (REPO_ROOT / "README.md", "GitHub 是代码备份，不是真实业务数据备份"),

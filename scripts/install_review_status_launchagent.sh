@@ -3,6 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ "$(basename "$REPO_ROOT")" == "current" ]]; then
+  WORKSPACE_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
+elif [[ "$(basename "$(dirname "$REPO_ROOT")")" == "releases" ]]; then
+  WORKSPACE_ROOT="$(cd "$REPO_ROOT/../.." && pwd)"
+else
+  WORKSPACE_ROOT="$REPO_ROOT"
+fi
 PLIST_DIR="${HOME}/Library/LaunchAgents"
 LAUNCH_DOMAIN="gui/$(id -u)"
 LABEL_BASE="${REVIEW_STATUS_LABEL_BASE:-com.luogic.operations-automation.review-status-sync}"
@@ -10,7 +17,7 @@ MAIN_LABEL="${LABEL_BASE}"
 CHECK_LABEL="${LABEL_BASE}-check"
 MAIN_PLIST="${PLIST_DIR}/${MAIN_LABEL}.plist"
 CHECK_PLIST="${PLIST_DIR}/${CHECK_LABEL}.plist"
-LOG_DIR="${REPO_ROOT}/runtime/review_status_sync_logs"
+LOG_DIR="${WORKSPACE_ROOT}/runtime/review_status_sync_logs"
 MAIN_LOG="${LOG_DIR}/main.log"
 CHECK_LOG="${LOG_DIR}/check.log"
 PREFERRED_PYTHON="${REVIEW_STATUS_PREFERRED_PYTHON:-/Library/Frameworks/Python.framework/Versions/3.11/bin/python3}"
