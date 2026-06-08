@@ -256,6 +256,22 @@ def build_notification_payload(mode: str, review_status: dict[str, Any] | None, 
     return {"title": "", "message": ""}
 
 
+def aggregate_cleanup(statuses: list[dict[str, Any]]) -> dict[str, Any]:
+    warnings: list[dict[str, Any]] = []
+    ok_count = 0
+    for status in statuses:
+        cleanup = status.get("cleanup") or {}
+        ok_count += int(cleanup.get("ok_count", 0) or 0)
+        for warning in cleanup.get("warnings", []):
+            if isinstance(warning, dict):
+                warnings.append(warning)
+    return {
+        "ok_count": ok_count,
+        "warning_count": len(warnings),
+        "warnings": warnings,
+    }
+
+
 def main() -> int:
     args = parse_args()
     today = date.today().isoformat()
@@ -307,12 +323,12 @@ def main() -> int:
         notify(notification["title"], notification["message"])
 
     ran_statuses = [status for status in child_statuses.values() if status]
-    overall_failed = any(status.get("status") == "failed" for status in ran_statuses)
-    cleanup_warning = any(
-        int((status.get("cleanup") or {}).get("warning_count", 0)) > 0
+    overall_failed = any(
+        (status.get("business_status") or status.get("status")) == "failed"
         for status in ran_statuses
     )
-    overall_status = "failed" if overall_failed else ("success_with_cleanup_warning" if cleanup_warning else "success")
+    cleanup_summary = aggregate_cleanup(ran_statuses)
+    overall_status = "failed" if overall_failed else "success"
 
     status = {
         "today": today,
@@ -320,11 +336,14 @@ def main() -> int:
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
         "status": overall_status,
+        "business_status": overall_status,
+        "cleanup_status": "warning" if cleanup_summary["warning_count"] > 0 else "not_needed",
         "summary": {
             "tasks_requested": [task["key"] for task in tasks_to_run],
             "tasks_ran": [key for key, item in task_runs.items() if item.get("ran")],
             "notification_sent": notified,
         },
+        "cleanup": cleanup_summary,
         "subtasks": {
             "review_status": child_statuses.get("review_status"),
             "sku_fill": child_statuses.get("sku_fill"),

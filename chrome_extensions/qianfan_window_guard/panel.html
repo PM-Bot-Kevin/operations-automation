@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qianfan Window Guard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f3ee;
+        --card: #fffdf8;
+        --text: #1e1a16;
+        --muted: #6d6256;
+        --line: #d9cfc2;
+        --accent: #9a3412;
+        --accent-strong: #7c2d12;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        background: linear-gradient(180deg, #f5dfd1 0%, var(--bg) 40%);
+        color: var(--text);
+      }
+      main {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        box-shadow: 0 12px 30px rgba(60, 30, 10, 0.08);
+        padding: 20px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      p {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+      label {
+        display: block;
+        margin: 18px 0 8px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px 14px;
+        font: inherit;
+        background: #fff;
+      }
+      .preset-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 11px 16px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--accent);
+        color: white;
+      }
+      button.secondary {
+        background: white;
+        color: var(--accent-strong);
+        border: 1px solid var(--line);
+      }
+      #status {
+        margin-top: 16px;
+        white-space: pre-wrap;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 84px;
+      }
+      .tip {
+        margin-top: 18px;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="card">
+        <h1>Qianfan Window Guard</h1>
+        <p>这个小工具只做一件事：登记它自己打开的 Chrome 窗口，并且只回收它自己开的窗口。</p>
+        <label for="url">目标地址</label>
+        <input id="url" value="https://example.com/?qianfan_window_guard_probe=1" />
+        <label for="delay">自动关闭延迟（毫秒）</label>
+        <input id="delay" type="number" min="1000" step="1000" value="60000" />
+        <div class="preset-row">
+          <button id="preset-short" class="secondary" type="button">短任务 60 秒</button>
+          <button id="preset-long" class="secondary" type="button">长任务 10 分钟</button>
+        </div>
+        <div class="actions">
+          <button id="open-auto-close">打开并自动关闭</button>
+          <button id="open-only" class="secondary">只打开</button>
+          <button id="close-latest" class="secondary">关闭最近一个自建窗口</button>
+          <button id="refresh" class="secondary">刷新自建窗口列表</button>
+        </div>
+        <div id="status">等待操作…</div>
+        <p class="tip">预期效果：会新开一个独立窗口，默认约 60 秒后只关闭这个窗口；长任务可一键切到 10 分钟；你原来的业务窗口不应受影响。</p>
+      </section>
+    </main>
+    <script src="panel.js"></script>
+  </body>
+</html>

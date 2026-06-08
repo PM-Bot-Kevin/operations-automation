@@ -174,6 +174,14 @@ def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def cleanup_status_from_summary(summary: dict[str, Any], *, default_status: str = "not_needed") -> str:
+    if int(summary.get("warning_count", 0) or 0) > 0:
+        return "warning"
+    if int(summary.get("ok_count", 0) or 0) > 0:
+        return "closed"
+    return default_status
+
+
 def summarize_failed_issues(mode: str, issues: list[dict[str, Any]]) -> str:
     failed = retryable_issues(issues)
     if not failed:
@@ -224,7 +232,10 @@ def main() -> int:
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "failed",
+            "business_status": "failed",
+            "cleanup_status": "not_needed",
             "summary": {"missing_sku_orders": 0, "stores_involved": 0, "updated_orders": 0, "failed_orders": 0},
+            "cleanup": {"ok_count": 0, "warning_count": 0, "warnings": []},
             "issues": [{"type": "plan_failed", "store_name": "整体", "failed_count": 0, "message": str(exc)}],
             "results": [],
         }
@@ -242,6 +253,8 @@ def main() -> int:
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "success",
+            "business_status": "success",
+            "cleanup_status": "not_needed",
             "summary": {
                 "missing_sku_orders": pending_orders,
                 "stores_involved": int(summary.get("stores_involved", 0)),
@@ -367,16 +380,15 @@ def main() -> int:
     failed_issues = retryable_issues(issues)
     cleanup_summary = summarize_cleanup_results(results)
     failed_orders_total = sum(int(issue.get("failed_count", 0)) for issue in failed_issues)
+    business_status = "failed" if failed_issues else "success"
     status = {
         "today": today,
         "mode": args.mode,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "status": (
-            "failed"
-            if failed_issues
-            else ("success_with_cleanup_warning" if cleanup_summary["warning_count"] > 0 else "success")
-        ),
+        "status": business_status,
+        "business_status": business_status,
+        "cleanup_status": cleanup_status_from_summary(cleanup_summary),
         "summary": {
             "missing_sku_orders": pending_orders,
             "stores_involved": int(summary.get("stores_involved", len(stores))),

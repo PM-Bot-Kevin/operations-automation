@@ -368,6 +368,182 @@ def list_window_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, A
     return descriptors
 
 
+def list_tab_descriptors(app_name: str = CHROME_APP_NAME) -> list[dict[str, Any]]:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持读取 {CHROME_APP_NAME} 标签页，不支持：{app_name}")
+    raw_output = _run_osascript(
+        [
+            f'tell application "{CHROME_APP_NAME}"',
+            "set outputLines to {}",
+            "repeat with windowIndex from 1 to count of windows",
+            "set currentWindow to window windowIndex",
+            "set currentWindowId to id of currentWindow",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            'set currentUrl to ""',
+            'set currentTitle to ""',
+            "try",
+            "set currentUrl to URL of currentTab",
+            "end try",
+            "try",
+            "set currentTitle to title of currentTab",
+            "end try",
+            'set end of outputLines to ((currentWindowId as text) & (ASCII character 9) & (id of currentTab as text) & (ASCII character 9) & currentUrl & (ASCII character 9) & currentTitle)',
+            "end repeat",
+            "end repeat",
+            "set previousDelimiters to AppleScript's text item delimiters",
+            "set AppleScript's text item delimiters to linefeed",
+            "set outputText to outputLines as text",
+            "set AppleScript's text item delimiters to previousDelimiters",
+            "return outputText",
+            "end tell",
+        ],
+    )
+    descriptors: list[dict[str, Any]] = []
+    for line in raw_output.splitlines():
+        if not line.strip():
+            continue
+        window_id_text, _, tail = line.partition("\t")
+        tab_id_text, _, tail = tail.partition("\t")
+        tab_url, _, tab_title = tail.partition("\t")
+        window_id_text = window_id_text.strip()
+        tab_id_text = tab_id_text.strip()
+        if not window_id_text.isdigit() or not tab_id_text.isdigit():
+            continue
+        descriptors.append(
+            {
+                "window_id": int(window_id_text),
+                "tab_id": int(tab_id_text),
+                "tab_url": tab_url.strip(),
+                "tab_title": tab_title.strip(),
+            }
+        )
+    return descriptors
+
+
+def open_tab_in_front_window(url: str, app_name: str = CHROME_APP_NAME) -> dict[str, int]:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持在 {CHROME_APP_NAME} 前台窗口开标签页，不支持：{app_name}")
+    if not url:
+        raise QianfanAccessError("打开标签页时 url 不能为空。")
+    raw_output = _run_osascript(
+        [
+            "on run argv",
+            "set targetUrl to item 1 of argv",
+            f'tell application "{CHROME_APP_NAME}"',
+            'if (count of windows) is 0 then error "应用没有可见窗口"',
+            "set targetWindow to front window",
+            "set newTab to make new tab at end of tabs of targetWindow",
+            "set active tab index of targetWindow to (count of tabs of targetWindow)",
+            "set URL of active tab of targetWindow to targetUrl",
+            "return ((id of targetWindow as text) & (ASCII character 9) & (id of newTab as text))",
+            "end tell",
+            "end run",
+        ],
+        [url],
+    )
+    window_id_text, _, tab_id_text = raw_output.partition("\t")
+    window_id_text = window_id_text.strip()
+    tab_id_text = tab_id_text.strip()
+    if not window_id_text.isdigit() or not tab_id_text.isdigit():
+        raise QianfanAccessError(f"无法解析新标签页信息：{raw_output}")
+    return {"window_id": int(window_id_text), "tab_id": int(tab_id_text)}
+
+
+def activate_tab_by_id(tab_id: int, *, window_id: int | None = None, app_name: str = CHROME_APP_NAME) -> dict[str, int]:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持激活 {CHROME_APP_NAME} 标签页，不支持：{app_name}")
+    if tab_id <= 0:
+        raise QianfanAccessError("激活标签页时 tab_id 必须是正整数。")
+    lines = [
+        "on run argv",
+        "set targetTabId to (item 1 of argv) as integer",
+        f'tell application "{CHROME_APP_NAME}"',
+        "activate",
+    ]
+    args = [str(tab_id)]
+    if window_id is not None:
+        if window_id <= 0:
+            raise QianfanAccessError("激活标签页时 window_id 必须是正整数。")
+        lines += [
+            "set targetWindowId to (item 2 of argv) as integer",
+            "set currentWindow to window id targetWindowId",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            "if ((id of currentTab) as integer) is targetTabId then",
+            "set active tab index of currentWindow to tabIndex",
+            "set index of currentWindow to 1",
+            "return ((id of currentWindow as text) & (ASCII character 9) & (id of currentTab as text))",
+            "end if",
+            "end repeat",
+            'error "没有找到匹配的 Chrome 标签页"',
+            "end tell",
+            "end run",
+        ]
+        args.append(str(window_id))
+    else:
+        lines += [
+            "repeat with currentWindow in every window",
+            "repeat with tabIndex from 1 to count of tabs of currentWindow",
+            "set currentTab to tab tabIndex of currentWindow",
+            "if ((id of currentTab) as integer) is targetTabId then",
+            "set active tab index of currentWindow to tabIndex",
+            "set index of currentWindow to 1",
+            "return ((id of currentWindow as text) & (ASCII character 9) & (id of currentTab as text))",
+            "end if",
+            "end repeat",
+            "end repeat",
+            'error "没有找到匹配的 Chrome 标签页"',
+            "end tell",
+            "end run",
+        ]
+    raw_output = _run_osascript(lines, args)
+    window_id_text, _, tab_id_text = raw_output.partition("\t")
+    window_id_text = window_id_text.strip()
+    tab_id_text = tab_id_text.strip()
+    if not window_id_text.isdigit() or not tab_id_text.isdigit():
+        raise QianfanAccessError(f"无法解析激活后的标签页信息：{raw_output}")
+    return {"window_id": int(window_id_text), "tab_id": int(tab_id_text)}
+
+
+def close_tab_by_id(tab_id: int, *, window_id: int | None = None, app_name: str = CHROME_APP_NAME) -> int:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 标签页，不支持：{app_name}")
+    if tab_id <= 0:
+        raise QianfanAccessError("关闭标签页时 tab_id 必须是正整数。")
+    lines = [
+        "on run argv",
+        "set targetTabId to (item 1 of argv) as integer",
+    ]
+    args = [str(tab_id)]
+    if window_id is not None:
+        if window_id <= 0:
+            raise QianfanAccessError("关闭标签页时 window_id 必须是正整数。")
+        lines += [
+            "set targetWindowId to (item 2 of argv) as integer",
+            f'tell application "{CHROME_APP_NAME}"',
+            "close (first tab of window id targetWindowId whose id is targetTabId)",
+            "return targetTabId as text",
+            "end tell",
+            "end run",
+        ]
+        args.append(str(window_id))
+    else:
+        lines += [
+            f'tell application "{CHROME_APP_NAME}"',
+            "repeat with currentWindow in every window",
+            "try",
+            "close (first tab of currentWindow whose id is targetTabId)",
+            "return targetTabId as text",
+            "end try",
+            "end repeat",
+            'error "没有找到匹配的 Chrome 标签页"',
+            "end tell",
+            "end run",
+        ]
+    return int(_run_osascript(lines, args))
+
+
 def close_window_by_id(window_id: int, app_name: str = CHROME_APP_NAME) -> int:
     if app_name != CHROME_APP_NAME:
         raise QianfanAccessError(f"当前只支持关闭 {CHROME_APP_NAME} 窗口，不支持：{app_name}")
@@ -1181,6 +1357,42 @@ def front_window_active_url(app_name: str = CHROME_APP_NAME) -> str:
         if element.role == "AXTextField" and element.description == "地址和搜索栏"
     ]
     return address_bars[0].value if address_bars else ""
+
+
+def front_window_active_tab_descriptor(app_name: str = CHROME_APP_NAME) -> dict[str, Any]:
+    if app_name != CHROME_APP_NAME:
+        raise QianfanAccessError(f"当前只支持读取 {CHROME_APP_NAME} 前台标签页，不支持：{app_name}")
+    raw_output = _run_osascript(
+        [
+            f'tell application "{CHROME_APP_NAME}"',
+            'if (count of windows) is 0 then error "应用没有可见窗口"',
+            "set currentWindow to front window",
+            "set currentTab to active tab of currentWindow",
+            'set currentUrl to ""',
+            'set currentTitle to ""',
+            "try",
+            "set currentUrl to URL of currentTab",
+            "end try",
+            "try",
+            "set currentTitle to title of currentTab",
+            "end try",
+            "return ((id of currentWindow as text) & (ASCII character 9) & (id of currentTab as text) & (ASCII character 9) & currentUrl & (ASCII character 9) & currentTitle)",
+            "end tell",
+        ],
+    )
+    window_id_text, _, tail = raw_output.partition("\t")
+    tab_id_text, _, tail = tail.partition("\t")
+    tab_url, _, tab_title = tail.partition("\t")
+    window_id_text = window_id_text.strip()
+    tab_id_text = tab_id_text.strip()
+    if not window_id_text.isdigit() or not tab_id_text.isdigit():
+        raise QianfanAccessError(f"无法解析前台标签页信息：{raw_output}")
+    return {
+        "window_id": int(window_id_text),
+        "tab_id": int(tab_id_text),
+        "tab_url": tab_url.strip(),
+        "tab_title": tab_title.strip(),
+    }
 
 
 def close_front_window_via_ax(app_name: str = CHROME_APP_NAME) -> None:

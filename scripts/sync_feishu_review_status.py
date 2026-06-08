@@ -33,8 +33,6 @@ from xhs_qianfan_access import (
     ChromeTaskSession,
     ChromeUiElement,
     PAGE_URLS,
-    bind_chrome_task_session,
-    close_chrome_task_session,
     element_center,
     focus_window_by_url_ax,
     load_profiles,
@@ -42,9 +40,16 @@ from xhs_qianfan_access import (
     press_front_window_element,
     resolve_profile,
     run_front_window_javascript,
-    start_chrome_task_session,
     set_front_window_element_value,
     wait_for_front_window,
+)
+from xhs_qianfan_session import (
+    bind_qianfan_task_session as bind_chrome_task_session,
+    close_qianfan_task_session as close_chrome_task_session,
+    focus_qianfan_task_session,
+    open_page_for_session,
+    start_qianfan_task_session as start_chrome_task_session,
+    wait_for_session_front_window,
 )
 
 
@@ -66,6 +71,7 @@ ORDER_COLUMN_CANDIDATES = ("订单id", "订单ID", "订单号")
 DATE_TEXTFIELD_COMMIT_KEY = "tab"
 DEFAULT_EXPORT_INTERACTION_MODE = "auto"
 DEFAULT_EXPORT_START_TIMEOUT_SECONDS = 60
+DEFAULT_QIANFAN_LONG_TASK_WINDOW_MS = 600000
 
 
 class ReviewSyncError(RuntimeError):
@@ -795,18 +801,24 @@ def export_store_via_browser_js(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    session = start_chrome_task_session(PAGE_URLS["comments"])
+    session = start_chrome_task_session(
+        target_url_contains=PAGE_URLS["comments"],
+        profile_directory=profile.directory,
+        page_key="comments",
+        cleanup_scope="owned_tabs_only",
+    )
     payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
-        open_page(profile, "comments", dry_run=False)
+        open_page_for_session(session, profile=profile, title_hint=store_name, log_step=log_step)
         irregular_pause(3.0, 6.0)
-        focus_comment_window_if_possible()
-        snapshot = wait_for_front_window(
+        snapshot = wait_for_session_front_window(
+            session,
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
+            log_step=log_step,
         )
         bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         log_step("评价页就绪，开始页内写入日期并搜索")
@@ -864,19 +876,25 @@ def export_store_via_mouse(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    session = start_chrome_task_session(PAGE_URLS["comments"])
+    session = start_chrome_task_session(
+        target_url_contains=PAGE_URLS["comments"],
+        profile_directory=profile.directory,
+        page_key="comments",
+        cleanup_scope="owned_tabs_only",
+    )
     pyautogui = _load_pyautogui()
     payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
-        open_page(profile, "comments", dry_run=False)
+        open_page_for_session(session, profile=profile, title_hint=store_name, log_step=log_step)
         irregular_pause(3.0, 6.0)
-        focus_comment_window_if_possible()
-        snapshot = wait_for_front_window(
+        snapshot = wait_for_session_front_window(
+            session,
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
+            log_step=log_step,
         )
         bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         controls = locate_comment_page_controls(snapshot)
@@ -892,11 +910,17 @@ def export_store_via_mouse(
         log_step("已点击搜索，等待页面整理结果")
         irregular_pause(4.0, 8.0)
 
-        snapshot = wait_for_front_window(
+        try:
+            focus_qianfan_task_session(session, log_step=log_step)
+        except Exception as exc:
+            log_step(f"本轮任务标签暂未登记到，继续按页面状态等待：{exc}")
+        snapshot = wait_for_session_front_window(
+            session,
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("全部导出",),
             timeout_seconds=25,
+            log_step=log_step,
         )
         controls = locate_comment_page_controls(snapshot)
         move_and_click(pyautogui, element_center(controls["export_button"]))
@@ -945,18 +969,24 @@ def export_store_via_ax(
     export_timeout_seconds: int,
 ) -> dict[str, Any]:
     after_time = datetime.now()
-    session = start_chrome_task_session(PAGE_URLS["comments"])
+    session = start_chrome_task_session(
+        target_url_contains=PAGE_URLS["comments"],
+        profile_directory=profile.directory,
+        page_key="comments",
+        cleanup_scope="owned_tabs_only",
+    )
     payload: dict[str, Any] | None = None
     try:
         log_step(f"打开店铺评价页：{store_name} ({profile.directory})")
-        open_page(profile, "comments", dry_run=False)
+        open_page_for_session(session, profile=profile, title_hint=store_name, log_step=log_step)
         irregular_pause(3.0, 6.0)
-        focus_comment_window_if_possible()
-        snapshot = wait_for_front_window(
+        snapshot = wait_for_session_front_window(
+            session,
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("评价时间", "搜索", "全部导出"),
             timeout_seconds=35,
+            log_step=log_step,
         )
         bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
         controls = locate_comment_page_controls(snapshot)
@@ -969,11 +999,17 @@ def export_store_via_ax(
         press_front_window_element(controls["search_button"].index)
         log_step("已触发搜索，等待页面整理结果")
         irregular_pause(4.0, 8.0)
-        snapshot = wait_for_front_window(
+        try:
+            focus_qianfan_task_session(session, log_step=log_step)
+        except Exception as exc:
+            log_step(f"本轮任务标签暂未登记到，继续按页面状态等待：{exc}")
+        snapshot = wait_for_session_front_window(
+            session,
             title_contains=store_name,
             url_contains=PAGE_URLS["comments"],
             required_texts=("全部导出",),
             timeout_seconds=25,
+            log_step=log_step,
         )
         controls = locate_comment_page_controls(snapshot)
         press_front_window_element(controls["export_button"].index)

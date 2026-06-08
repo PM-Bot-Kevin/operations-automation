@@ -24,20 +24,25 @@ from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     PAGE_URLS,
     ChromeProfile,
-    bind_chrome_task_session,
-    close_chrome_task_session,
     element_center,
     focus_window_by_url_ax,
     load_profiles,
     open_page,
     press_front_window_element,
     run_front_window_javascript,
-    start_chrome_task_session,
     set_front_window_element_value,
     wait_for_front_window,
 )
 from xhs_qianfan_order_page import find_order_spec, locate_order_page_controls
 from xhs_qianfan_sku_normalizer import build_exact_mapping, normalize_sku_value
+from xhs_qianfan_session import (
+    bind_qianfan_task_session as bind_chrome_task_session,
+    close_qianfan_task_session as close_chrome_task_session,
+    focus_qianfan_task_session,
+    open_page_for_session,
+    start_qianfan_task_session as start_chrome_task_session,
+    wait_for_session_front_window,
+)
 
 
 DEFAULT_BASE_TOKEN = "W0XvbodVPaE854sF42IcnHkIn1d"
@@ -427,20 +432,23 @@ def build_order_query_runtime_paths(runtime_dir: Path, store_name: str) -> tuple
     return runtime_dir / f"{stamp}_{safe_store_name}_updates.json", runtime_dir / "latest_updates.json"
 
 
+def wait_for_order_page(session: Any, store_name: str, *, timeout_seconds: int = 35, poll_seconds: float = 1.5) -> dict[str, Any]:
+    return wait_for_session_front_window(
+        session,
+        title_contains=store_name,
+        url_contains=PAGE_URLS["orders"],
+        required_texts=("订单管理", "查询"),
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+        log_step=log_step,
+    )
+
+
 def focus_order_window_if_possible() -> None:
     try:
         focus_window_by_url_ax(PAGE_URLS["orders"])
     except Exception:
         return
-
-
-def wait_for_order_page(store_name: str) -> dict[str, Any]:
-    return wait_for_front_window(
-        title_contains=store_name,
-        url_contains=PAGE_URLS["orders"],
-        required_texts=("订单管理", "查询"),
-        timeout_seconds=35,
-    )
 
 
 def ensure_order_page_window(store_name: str, profile: ChromeProfile) -> dict[str, Any]:
@@ -456,7 +464,12 @@ def ensure_order_page_window(store_name: str, profile: ChromeProfile) -> dict[st
         open_page(profile, "orders", dry_run=False)
         irregular_pause(3.0, 6.0)
         focus_order_window_if_possible()
-        return wait_for_order_page(store_name)
+        return wait_for_front_window(
+            title_contains=store_name,
+            url_contains=PAGE_URLS["orders"],
+            required_texts=("订单管理", "查询"),
+            timeout_seconds=35,
+        )
 
 
 def build_order_query_script(order_no: str) -> str:
@@ -536,19 +549,19 @@ def ensure_browser_js_ok(result: dict[str, Any], *, action: str) -> dict[str, An
     raise FillSkuError(f"{action}失败：{detail}")
 
 
-def query_order_spec_via_ax(order_no: str, store_name: str) -> str:
-    snapshot = wait_for_order_page(store_name)
+def query_order_spec_via_ax(order_no: str, store_name: str, session: Any) -> str:
+    snapshot = wait_for_order_page(session, store_name)
     controls = locate_order_page_controls(snapshot)
     set_front_window_element_value(controls.search_field_index, order_no)
     irregular_pause(0.6, 1.2)
     press_front_window_element(controls.query_button_index)
     irregular_pause(4.0, 7.0)
-    result_snapshot = wait_for_order_page(store_name)
+    result_snapshot = wait_for_order_page(session, store_name)
     return find_order_spec(result_snapshot, order_no)
 
 
-def query_order_spec_via_browser_js(order_no: str, store_name: str) -> str:
-    wait_for_order_page(store_name)
+def query_order_spec_via_browser_js(order_no: str, store_name: str, session: Any) -> str:
+    wait_for_order_page(session, store_name)
     ensure_browser_js_ok(run_front_window_json(build_order_query_script(order_no)), action="页内搜索订单")
     irregular_pause(4.0, 7.0)
     result = ensure_browser_js_ok(run_front_window_json(build_order_extract_script(order_no)), action="页内提取规格")
@@ -588,9 +601,9 @@ def replace_text(pyautogui: Any, point: tuple[int, int], text: str) -> None:
     type_text_humanized(pyautogui, text)
 
 
-def query_order_spec_via_mouse(order_no: str, store_name: str) -> str:
+def query_order_spec_via_mouse(order_no: str, store_name: str, session: Any) -> str:
     pyautogui = _load_pyautogui()
-    snapshot = wait_for_order_page(store_name)
+    snapshot = wait_for_order_page(session, store_name)
     controls = locate_order_page_controls(snapshot)
     search_field = next((element for element in snapshot["elements"] if element.index == controls.search_field_index), None)
     query_button = next((element for element in snapshot["elements"] if element.index == controls.query_button_index), None)
@@ -600,22 +613,22 @@ def query_order_spec_via_mouse(order_no: str, store_name: str) -> str:
     irregular_pause(0.5, 1.0)
     move_and_click(pyautogui, element_center(query_button))
     irregular_pause(4.0, 7.0)
-    result_snapshot = wait_for_order_page(store_name)
+    result_snapshot = wait_for_order_page(session, store_name)
     return find_order_spec(result_snapshot, order_no)
 
 
-def query_order_spec(order_no: str, store_name: str, interaction_mode: str) -> tuple[str, str]:
+def query_order_spec(order_no: str, store_name: str, interaction_mode: str, session: Any) -> tuple[str, str]:
     if interaction_mode == "ax":
-        return query_order_spec_via_ax(order_no, store_name), "ax"
+        return query_order_spec_via_ax(order_no, store_name, session), "ax"
     if interaction_mode == "browser_js":
-        return query_order_spec_via_browser_js(order_no, store_name), "browser_js"
+        return query_order_spec_via_browser_js(order_no, store_name, session), "browser_js"
     if interaction_mode == "mouse":
-        return query_order_spec_via_mouse(order_no, store_name), "mouse"
+        return query_order_spec_via_mouse(order_no, store_name, session), "mouse"
 
     errors: list[str] = []
     for mode in DEFAULT_INTERACTION_MODES:
         try:
-            return query_order_spec(order_no, store_name, mode)
+            return query_order_spec(order_no, store_name, mode, session)
         except Exception as exc:
             errors.append(f"{mode}: {exc}")
     raise FillSkuError(f"订单 {order_no} 三层读取都失败：{' | '.join(errors)}")
@@ -659,9 +672,14 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
     if not rounds:
         raise FillSkuError("计划里没有可执行轮次。")
 
-    session = start_chrome_task_session(PAGE_URLS["orders"])
+    session = start_chrome_task_session(
+        target_url_contains=PAGE_URLS["orders"],
+        profile_directory=profile.directory,
+        page_key="orders",
+    )
     try:
-        snapshot = ensure_order_page_window(store_name, profile)
+        open_page_for_session(session, profile=profile, title_hint=store_name, log_step=log_step)
+        snapshot = wait_for_order_page(session, store_name)
         bind_chrome_task_session(session, snapshot, title_hint=store_name, log_step=log_step)
 
         updates: list[dict[str, str]] = []
@@ -670,7 +688,11 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
         for round_index, round_orders in enumerate(rounds, start=1):
             if args.max_orders > 0 and processed_orders >= args.max_orders:
                 break
-            wait_for_order_page(store_name)
+            try:
+                focus_qianfan_task_session(session, log_step=log_step)
+            except Exception as exc:
+                log_step(f"本轮任务标签暂未登记到，继续按页面状态等待：{exc}")
+            wait_for_order_page(session, store_name)
             for order_no in round_orders:
                 if args.max_orders > 0 and processed_orders >= args.max_orders:
                     break
@@ -678,7 +700,7 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
                 if not record:
                     warnings.append(f"计划里找不到订单 {order_no} 的 record_id，已跳过。")
                     continue
-                spec_text, used_mode = query_order_spec(order_no, store_name, args.interaction_mode)
+                spec_text, used_mode = query_order_spec(order_no, store_name, args.interaction_mode, session)
                 normalized = normalize_sku_value(spec_text, sku_exact_mapping)
                 updates.append(
                     {

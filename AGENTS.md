@@ -70,3 +70,5 @@
 - 如果主跑只是查到漏上评，直接通知结果，不要为了漏上评再补跑。
 - 这条定时任务的 launchd 安装脚本必须固定写入 `PATH` 和 `REVIEW_STATUS_PYTHON_BIN`，确保实际执行的是带 `pyautogui` 的 Python 3.11，不允许落回系统默认 Python。
 - 页面被用户手动关掉不构成阻塞；正式任务应优先复用对应店铺 Chrome 资料重新打开评价管理页，而不是要求用户先把页面留着。
+- 涉及千帆后台的正式脚本，统一优先复用 `scripts/xhs_qianfan_session.py` 里的“千帆任务会话”；默认只回收本轮自建窗口，不碰用户原来就开着的页面。
+- 千帆任务的正式状态口径固定拆成两层：业务结果写 `business_status`，收尾结果写 `cleanup_status`；页面没关上只记 cleanup warning，不把任务通知成失败。

@@ -225,10 +225,13 @@ bash scripts/install_review_status_launchagent.sh
 - 如果本机同时跑着多套 `Google Chrome` 主进程，正式链路会优先按“目标页面 URL + 窗口标题/页面文本里的店铺名”选中正确窗口，不再简单取 `pgrep` 返回的第一个 Chrome 进程
 - 如果 Chrome 禁用了“Apple 事件里执行 JavaScript”，正式链路不会因为页内 JS 不可用而整轮失败；活动蒙层会自动降级到 `AX` 安全按钮兜底，只允许点“关闭 / 取消 / 稍后 / 跳过”这类安全控件
 - 每轮任务用到的评价导出临时文件，任务结束后会自动删除，不在桌面和运行目录长期残留
-- 每轮任务结束后，会先按“自动任务会话”去关闭本轮绑定到的目标窗口；只有绑定失败时，才退回“任务前后窗口差异”兜底，不再把窗口差异当唯一主方案
+- 每轮任务结束后，会先按 `scripts/xhs_qianfan_session.py` 里的“千帆任务会话”去回收本轮自建窗口，不再把“绑定窗口 + 窗口差异推断”当成唯一主方案
 - 如果绑定窗口已经偏离目标页或疑似被你手动接管，正式口径是不强关，只把这轮记成 cleanup warning，避免误关你正在看的页面
-- cleanup 结果现在会进入正式状态文件；如果业务成功但收尾有残留，会记成 `success_with_cleanup_warning`，不再假装完全成功
-- 这条“自动任务会话 + 绑定窗口优先收尾 + 窗口差异兜底 + cleanup 状态落盘”的收尾规则，已经下沉成千帆后台共用能力；后续新增千帆任务默认优先复用，不再各自维护一套关窗逻辑
+- cleanup 结果现在会进入正式状态文件；业务结果固定单独落 `business_status`，收尾结果单独落 `cleanup_status`，页面没关上只记 warning，不把任务通知成失败
+- 当前仓库另外新增了独立的窗口守卫小工具：扩展目录固定是 `chrome_extensions/qianfan_window_guard`，检查脚本固定是 `scripts/check_qianfan_window_guard.py`，说明文档固定看 [docs/qianfan_window_guard.md](/Users/luogic/Code/运营自动化/docs/qianfan_window_guard.md)
+- 这套 `Qianfan Window Guard` 只负责“自己开的窗口自己关”，不负责找控件、不负责业务取数；后续千帆任务的窗口回收应优先向这套能力收敛
+- `scripts/xhs_qianfan_session.py` 目前仍是现有业务脚本里的过渡收尾层，但不再把它单独视为唯一长期关窗主线
+- 现有千帆任务、后续新增千帆任务、以及后续新接入的店铺资料，默认都要复用这一套公共关页能力；不允许每个任务各自维护一套新的开页/关页逻辑
 - 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
 - 涉及千帆后台时，依然继续复用 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 里的极度保守口径
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我同步已上评”或类似意思，助手应直接按这套流程执行，不要再临时发明别的链路

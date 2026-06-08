@@ -164,6 +164,14 @@ def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def cleanup_status_from_summary(summary: dict[str, Any], *, default_status: str = "not_needed") -> str:
+    if int(summary.get("warning_count", 0) or 0) > 0:
+        return "warning"
+    if int(summary.get("ok_count", 0) or 0) > 0:
+        return "closed"
+    return default_status
+
+
 def should_run_scheduled_retry(today: str) -> bool:
     latest_status = load_latest_status()
     if not latest_status:
@@ -237,7 +245,10 @@ def main() -> int:
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "failed",
+            "business_status": "failed",
+            "cleanup_status": "not_needed",
             "summary": {"pending_orders": 0, "stores_involved": 0},
+            "cleanup": {"ok_count": 0, "warning_count": 0, "warnings": []},
             "issues": [{"type": "plan_failed", "store_name": "整体", "message": str(exc)}],
             "results": [],
         }
@@ -254,6 +265,8 @@ def main() -> int:
             "started_at": started_at,
             "finished_at": datetime.now().isoformat(timespec="seconds"),
             "status": "success",
+            "business_status": "success",
+            "cleanup_status": "not_needed",
             "summary": plan["summary"],
             "cleanup": {"ok_count": 0, "warning_count": 0, "warnings": []},
             "issues": [],
@@ -331,16 +344,15 @@ def main() -> int:
 
     failed_issues = retryable_issues(issues)
     cleanup_summary = summarize_cleanup_results(results)
+    business_status = "failed" if failed_issues else "success"
     status = {
         "today": today,
         "mode": args.mode,
         "started_at": started_at,
         "finished_at": datetime.now().isoformat(timespec="seconds"),
-        "status": (
-            "failed"
-            if failed_issues
-            else ("success_with_cleanup_warning" if cleanup_summary["warning_count"] > 0 else "success")
-        ),
+        "status": business_status,
+        "business_status": business_status,
+        "cleanup_status": cleanup_status_from_summary(cleanup_summary),
         "summary": plan["summary"],
         "cleanup": cleanup_summary,
         "issues": issues,

@@ -27,19 +27,26 @@ SYNC_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "sync_feishu_review_status.p
 RUN_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "run_review_status_sync.py"
 RUN_SKU_AUTO_SCRIPT = REPO_ROOT / "scripts" / "run_sku_fill_auto.py"
 RUN_REVIEW_DAILY_OPS_SCRIPT = REPO_ROOT / "scripts" / "run_review_daily_ops.py"
+CHECK_QIANFAN_WINDOW_GUARD_SCRIPT = REPO_ROOT / "scripts" / "check_qianfan_window_guard.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 ORDER_PAGE_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_order_page.py"
 SKU_NORMALIZER_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_sku_normalizer.py"
+QIANFAN_SESSION_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_session.py"
+
+
+def load_module(module_name: str, script_path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class WorkspaceGovernanceTests(unittest.TestCase):
     def test_qianfan_access_prefers_existing_chrome_profiles(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         with tempfile.TemporaryDirectory(prefix="chrome-local-state-") as temp_dir:
             local_state = Path(temp_dir) / "Local State"
@@ -69,11 +76,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             self.assertIn("app-item/comment/analysis", module.open_page(resolved, "comments", dry_run=True))
 
     def test_qianfan_access_element_center_uses_position_and_size(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         element = module.ChromeUiElement(
             index=1,
@@ -87,11 +90,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertEqual(module.element_center(element), (130, 210))
 
     def test_qianfan_access_runs_front_window_javascript_via_osascript(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         with mock.patch.object(module.subprocess, "run") as mocked_run:
             mocked_run.return_value = subprocess.CompletedProcess(
@@ -109,11 +108,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertIn("JSON.stringify({ok:true})", command)
 
     def test_qianfan_access_focuses_window_by_url_via_osascript(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         with mock.patch.object(module.subprocess, "run") as mocked_run:
             mocked_run.return_value = subprocess.CompletedProcess(
@@ -131,11 +126,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertIn("app-item/comment/analysis", command)
 
     def test_qianfan_access_dismiss_script_prefers_safe_close_actions(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         script = module.build_dismiss_front_window_obstructions_script()
         self.assertIn(".d-modal-close", script)
@@ -144,11 +135,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertIn("去参与", script)
 
     def test_qianfan_access_wait_for_front_window_dismisses_overlay_and_allows_store_text_pool(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         snapshot = {
             "pid": 52662,
@@ -203,11 +190,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertEqual(dismiss_mock.call_count, 2)
 
     def test_qianfan_access_focus_window_by_url_ax_uses_matching_snapshot(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         target = {
             "pid": 52662,
@@ -235,12 +218,213 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertEqual(result["pid"], 52662)
         raise_mock.assert_called_once_with(target)
 
+    def test_check_qianfan_window_guard_detects_enabled_unpacked_extension(self) -> None:
+        module = load_module("check_qianfan_window_guard", CHECK_QIANFAN_WINDOW_GUARD_SCRIPT)
+
+        with tempfile.TemporaryDirectory(prefix="qianfan-window-guard-") as temp_dir:
+            home = Path(temp_dir)
+            chrome_root = home / "Library/Application Support/Google/Chrome"
+            local_state = chrome_root / "Local State"
+            profile_root = chrome_root / "Default"
+            profile_root.mkdir(parents=True, exist_ok=True)
+            local_state.parent.mkdir(parents=True, exist_ok=True)
+            local_state.write_text(
+                json.dumps(
+                    {
+                        "profile": {
+                            "last_used": "Default",
+                            "info_cache": {"Default": {"name": "哈个咋", "user_name": ""}},
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            extension_dir = (home / "fake-extension" / "qianfan_window_guard").resolve()
+            extension_dir.mkdir(parents=True, exist_ok=True)
+            (profile_root / "Secure Preferences").write_text(
+                json.dumps(
+                    {
+                        "extensions": {
+                            "settings": {
+                                "abcdefghijklmnopabcdefghijklmnop": {
+                                    "state": 1,
+                                    "location": 8,
+                                    "path": str(extension_dir),
+                                    "manifest": {"name": module.EXTENSION_NAME},
+                                }
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(module.Path, "home", return_value=home),
+                mock.patch.object(module, "EXTENSION_DIR", extension_dir),
+            ):
+                profiles = module.load_profiles(local_state)
+                result = module.detect_guard("Default")
+
+        self.assertEqual([profile.directory for profile in profiles], ["Default"])
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["matches"][0]["path"], extension_dir.as_posix())
+
+    def test_check_qianfan_window_guard_falls_back_to_preferences_and_ignores_mismatched_path(self) -> None:
+        module = load_module("check_qianfan_window_guard_fallback", CHECK_QIANFAN_WINDOW_GUARD_SCRIPT)
+
+        with tempfile.TemporaryDirectory(prefix="qianfan-window-guard-fallback-") as temp_dir:
+            home = Path(temp_dir)
+            chrome_root = home / "Library/Application Support/Google/Chrome"
+            profile_root = chrome_root / "Profile 32"
+            profile_root.mkdir(parents=True, exist_ok=True)
+            extension_dir = (home / "fake-extension" / "qianfan_window_guard").resolve()
+            extension_dir.mkdir(parents=True, exist_ok=True)
+            other_dir = home / "other-extension"
+            other_dir.mkdir(parents=True, exist_ok=True)
+            (profile_root / "Preferences").write_text(
+                json.dumps(
+                    {
+                        "extensions": {
+                            "settings": {
+                                "badbadbadbadbadbadbadbadbadbadba": {
+                                    "state": 1,
+                                    "location": 8,
+                                    "path": str(other_dir),
+                                    "manifest": {"name": module.EXTENSION_NAME},
+                                },
+                                "abcdefghijklmnopabcdefghijklmnop": {
+                                    "state": 0,
+                                    "location": 8,
+                                    "path": str(extension_dir),
+                                    "manifest": {"name": module.EXTENSION_NAME},
+                                },
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(module.Path, "home", return_value=home),
+                mock.patch.object(module, "EXTENSION_DIR", extension_dir),
+            ):
+                result = module.detect_guard("Profile 32")
+
+        self.assertTrue(result["installed"])
+        self.assertFalse(result["enabled"])
+        self.assertTrue(result["preferences_path"].endswith("/Preferences"))
+        self.assertEqual(len(result["matches"]), 1)
+
+    def test_check_qianfan_window_guard_detects_real_unpacked_entry_without_manifest_state(self) -> None:
+        module = load_module("check_qianfan_window_guard_real_unpacked", CHECK_QIANFAN_WINDOW_GUARD_SCRIPT)
+
+        with tempfile.TemporaryDirectory(prefix="qianfan-window-guard-real-") as temp_dir:
+            home = Path(temp_dir)
+            chrome_root = home / "Library/Application Support/Google/Chrome"
+            profile_root = chrome_root / "Default"
+            profile_root.mkdir(parents=True, exist_ok=True)
+            extension_dir = (home / "workspace" / "chrome_extensions" / "qianfan_window_guard").resolve()
+            extension_dir.mkdir(parents=True, exist_ok=True)
+            (extension_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "manifest_version": 3,
+                        "name": module.EXTENSION_NAME,
+                        "version": "0.1.0",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (profile_root / "Secure Preferences").write_text(
+                json.dumps(
+                    {
+                        "extensions": {
+                            "settings": {
+                                "ecajdjejakmjipbojjnnnlgjdlbhegei": {
+                                    "path": str(extension_dir),
+                                    "location": 4,
+                                    "disable_reasons": [],
+                                }
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(module.Path, "home", return_value=home),
+                mock.patch.object(module, "EXTENSION_DIR", extension_dir),
+            ):
+                result = module.detect_guard("Default")
+
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["matches"][0]["name"], module.EXTENSION_NAME)
+
+    def test_check_qianfan_window_guard_accepts_external_unpacked_extension_dir(self) -> None:
+        module = load_module("check_qianfan_window_guard_external_unpacked", CHECK_QIANFAN_WINDOW_GUARD_SCRIPT)
+
+        with tempfile.TemporaryDirectory(prefix="qianfan-window-guard-external-") as temp_dir:
+            home = Path(temp_dir)
+            chrome_root = home / "Library/Application Support/Google/Chrome"
+            profile_root = chrome_root / "Profile 34"
+            profile_root.mkdir(parents=True, exist_ok=True)
+            workspace_extension_dir = (home / "workspace" / "chrome_extensions" / "qianfan_window_guard").resolve()
+            workspace_extension_dir.mkdir(parents=True, exist_ok=True)
+            external_extension_dir = (home / "Desktop" / "qianfan_window_guard_real").resolve()
+            external_extension_dir.mkdir(parents=True, exist_ok=True)
+            (external_extension_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "manifest_version": 3,
+                        "name": module.EXTENSION_NAME,
+                        "version": "0.1.0",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (profile_root / "Secure Preferences").write_text(
+                json.dumps(
+                    {
+                        "extensions": {
+                            "settings": {
+                                "bcfcfgincfgogkgcnmjboophiiakefek": {
+                                    "path": str(external_extension_dir),
+                                    "location": 4,
+                                    "disable_reasons": [],
+                                }
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(module.Path, "home", return_value=home),
+                mock.patch.object(module, "EXTENSION_DIR", workspace_extension_dir),
+            ):
+                result = module.detect_guard("Profile 34")
+
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["matches"][0]["path"], external_extension_dir.as_posix())
+        self.assertFalse(result["matches"][0]["path_matches_workspace"])
+        self.assertTrue(result["matches"][0]["compatible_unpacked_path"])
+
     def test_qianfan_access_wait_for_front_window_falls_back_to_ax_dismiss_when_js_unavailable(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         snapshot = {
             "pid": 52662,
@@ -282,11 +466,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         ax_dismiss_mock.assert_called_once()
 
     def test_qianfan_access_lists_and_closes_windows_safely(self) -> None:
-        spec = importlib.util.spec_from_file_location("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
         with mock.patch.object(module.subprocess, "run") as mocked_run:
             mocked_run.side_effect = [
@@ -334,12 +514,291 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertIn("preferLast", close_url_command)
         self.assertIn("app-item/comment/analysis", close_url_command)
 
+    def test_qianfan_session_tracks_owned_tab_when_same_page_already_exists(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        with mock.patch.object(
+            session_module,
+            "list_tab_descriptors",
+            side_effect=[
+                [{"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"}],
+                [
+                    {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
+                    {"window_id": 101, "tab_id": 2002, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "新标签"},
+                ],
+            ],
+        ):
+            session = session_module.start_qianfan_task_session(
+                target_url_contains=access_module.PAGE_URLS["comments"],
+                profile_directory="Profile 32",
+                page_key="comments",
+            )
+            session_module.register_owned_tabs(session)
+
+        self.assertEqual(
+            [(item["window_id"], item["tab_id"]) for item in session.owned_tabs],
+            [(101, 2002)],
+        )
+        self.assertEqual(session.cleanup_scope, "owned_tabs_only")
+
+    def test_qianfan_session_falls_back_to_unique_new_tab_before_target_url_is_ready(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        with mock.patch.object(
+            session_module,
+            "list_tab_descriptors",
+            side_effect=[
+                [{"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"}],
+                [
+                    {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
+                    {"window_id": 101, "tab_id": 2002, "tab_url": "", "tab_title": "新标签"},
+                ],
+            ],
+        ):
+            session = session_module.start_qianfan_task_session(
+                target_url_contains=access_module.PAGE_URLS["comments"],
+                profile_directory="Profile 32",
+                page_key="comments",
+            )
+            session_module.register_owned_tabs(session)
+
+        self.assertEqual(
+            [(item["window_id"], item["tab_id"]) for item in session.owned_tabs],
+            [(101, 2002)],
+        )
+
+    def test_qianfan_session_open_page_in_existing_profile_window_returns_owned_tab(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-1",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 32",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[
+                {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"}
+            ],
+        )
+
+        with (
+            mock.patch.object(session_module, "open_page") as open_mock,
+            mock.patch.object(
+                session_module,
+                "list_tab_descriptors",
+                side_effect=[
+                    [
+                        {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"},
+                    ],
+                    [
+                        {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"},
+                        {"window_id": 176962561, "tab_id": 176962564, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "评价管理"},
+                    ],
+                ],
+            ),
+        ):
+            session_module.open_page_for_session(
+                session,
+                profile=mock.Mock(directory="Profile 32"),
+                title_hint="抱树的koala小姐",
+            )
+
+        open_mock.assert_called_once_with(mock.ANY, "comments", dry_run=False)
+        self.assertEqual(
+            session.owned_tabs,
+            [
+                {
+                    "window_id": 176962561,
+                    "tab_id": 176962564,
+                    "tab_url": access_module.PAGE_URLS["comments"],
+                    "tab_title": "评价管理",
+                }
+            ],
+        )
+        self.assertEqual(session.launch_strategy, "owned_window_per_task")
+
+    def test_qianfan_session_open_page_falls_back_to_unique_new_tab_before_target_url_ready(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-1b",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 34",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[
+                {"window_id": 201, "tab_id": 3001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"}
+            ],
+        )
+
+        with (
+            mock.patch.object(session_module, "open_page"),
+            mock.patch.object(
+                session_module,
+                "list_tab_descriptors",
+                side_effect=[
+                    [{"window_id": 201, "tab_id": 3001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"}],
+                    [
+                        {"window_id": 201, "tab_id": 3001, "tab_url": access_module.PAGE_URLS["orders"], "tab_title": "旧页"},
+                        {"window_id": 202, "tab_id": 4002, "tab_url": "", "tab_title": "新窗口"},
+                    ],
+                ],
+            ),
+        ):
+            session_module.open_page_for_session(
+                session,
+                profile=mock.Mock(directory="Profile 34"),
+                title_hint="朝仓里服饰",
+            )
+
+        self.assertEqual(
+            session.owned_tabs,
+            [
+                {
+                    "window_id": 202,
+                    "tab_id": 4002,
+                    "tab_url": "",
+                    "tab_title": "新窗口",
+                }
+            ],
+        )
+
+    def test_qianfan_session_cleanup_closes_only_owned_tab(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-2",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 32",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[],
+            owned_tabs=[{"window_id": 176962561, "tab_id": 176962564, "tab_url": access_module.PAGE_URLS["comments"]}],
+            ownership_registered=True,
+        )
+
+        with (
+            mock.patch.object(
+                session_module,
+                "list_tab_descriptors",
+                return_value=[
+                    {"window_id": 176962561, "tab_id": 176962562, "tab_url": "http://localhost:3001/compose-export", "tab_title": "草稿编排页"},
+                ],
+            ),
+            mock.patch.object(session_module, "close_tab_by_id") as close_mock,
+        ):
+            cleanup = session_module.close_qianfan_task_session(session)
+
+        close_mock.assert_called_once_with(176962564, window_id=176962561, app_name=access_module.CHROME_APP_NAME)
+        self.assertTrue(cleanup["ok"])
+        self.assertEqual(cleanup["closed_targets"], ["176962561#176962564"])
+
+    def test_review_status_cleanup_warning_keeps_business_success(self) -> None:
+        module = load_module("run_review_status_sync", RUN_REVIEW_STATUS_SCRIPT)
+
+        fake_plan = {
+            "summary": {
+                "records_scanned": 3,
+                "records_with_review_date": 2,
+                "pending_orders": 1,
+                "stores_involved": 1,
+            },
+            "stores": [
+                {
+                    "store_name": "抱树的koala小姐",
+                    "earliest_review_date": "2026-06-01",
+                }
+            ],
+        }
+        export_payload = {
+            "store_name": "抱树的koala小姐",
+            "saved_file": "/tmp/export.csv",
+            "source_file": "/tmp/source.csv",
+            "cleanup": {
+                "ok": False,
+                "cleanup_status": "warning",
+                "reason": "close_failed",
+                "strategy": "owned_only",
+                "closed_targets": [],
+                "remaining_targets": ["202:2002"],
+                "binding_window_id": None,
+                "skipped": False,
+            },
+        }
+        reconcile_payload = {
+            "store_name": "抱树的koala小姐",
+            "missing_count": 1,
+            "missing_orders": ["P1"],
+        }
+        saved_status: dict[str, Any] = {}
+
+        def fake_run_json_command(args: list[str]) -> dict[str, Any]:
+            if "plan" in args:
+                return fake_plan
+            if "export-store" in args:
+                return export_payload
+            if "reconcile" in args:
+                return reconcile_payload
+            raise AssertionError(args)
+
+        with (
+            mock.patch.object(module, "run_json_command", side_effect=fake_run_json_command),
+            mock.patch.object(module, "cleanup_export_files"),
+            mock.patch.object(module, "save_status", side_effect=lambda status: saved_status.update(status)),
+            mock.patch.object(module, "notify") as notify_mock,
+            mock.patch.object(sys, "argv", ["run_review_status_sync.py", "--mode", "main"]),
+        ):
+            exit_code = module.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved_status["status"], "success")
+        self.assertEqual(saved_status["business_status"], "success")
+        self.assertEqual(saved_status["cleanup"]["warning_count"], 1)
+        notify_mock.assert_called_once()
+
+    def test_daily_ops_cleanup_warning_keeps_overall_success(self) -> None:
+        module = load_module("run_review_daily_ops", RUN_REVIEW_DAILY_OPS_SCRIPT)
+
+        review_status = {
+            "today": "2026-06-08",
+            "mode": "main",
+            "status": "success",
+            "business_status": "success",
+            "cleanup": {"warning_count": 1, "warnings": [{"store_name": "抱树的koala小姐"}]},
+            "issues": [],
+            "results": [],
+        }
+        sku_status = {
+            "today": "2026-06-08",
+            "mode": "main",
+            "status": "success",
+            "business_status": "success",
+            "cleanup": {"warning_count": 0, "warnings": []},
+            "issues": [],
+            "results": [],
+        }
+        saved_status: dict[str, Any] = {}
+
+        with (
+            mock.patch.object(module, "run_task", side_effect=[review_status, sku_status]),
+            mock.patch.object(module, "save_status", side_effect=lambda status: saved_status.update(status)),
+            mock.patch.object(module, "build_notification_payload", return_value={"title": "", "message": ""}),
+            mock.patch.object(sys, "argv", ["run_review_daily_ops.py", "--mode", "main"]),
+        ):
+            exit_code = module.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved_status["status"], "success")
+        self.assertEqual(saved_status["business_status"], "success")
+        self.assertEqual(saved_status["cleanup"]["warning_count"], 1)
+
     def test_export_feishu_order_images_supports_natural_language_dates(self) -> None:
-        spec = importlib.util.spec_from_file_location("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
-        assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        module = load_module("export_feishu_order_images", EXPORT_IMAGES_SCRIPT)
 
         today = module.date(2026, 5, 28)
         self.assertEqual(
@@ -684,7 +1143,9 @@ print(json.dumps(payload, ensure_ascii=False))
                 mock.patch.object(fill_module, "irregular_pause"),
                 mock.patch.object(fill_module, "focus_order_window_if_possible"),
                 mock.patch.object(fill_module, "wait_for_front_window", return_value={"window_title": "订单查询"}),
+                mock.patch.object(fill_module, "open_page_for_session"),
                 mock.patch.object(fill_module, "wait_for_order_page"),
+                mock.patch.object(fill_module, "focus_qianfan_task_session"),
                 mock.patch.object(
                     fill_module,
                     "query_order_spec",
@@ -827,9 +1288,10 @@ print(json.dumps(payload, ensure_ascii=False))
             )
             with (
                 mock.patch.object(fill_module, "start_chrome_task_session", return_value=session),
-                mock.patch.object(fill_module, "ensure_order_page_window", return_value={"window_title": "订单管理"}),
+                mock.patch.object(fill_module, "open_page_for_session"),
                 mock.patch.object(fill_module, "bind_chrome_task_session"),
-                mock.patch.object(fill_module, "wait_for_order_page"),
+                mock.patch.object(fill_module, "wait_for_order_page", return_value={"window_title": "订单管理"}),
+                mock.patch.object(fill_module, "focus_qianfan_task_session"),
                 mock.patch.object(fill_module, "query_order_spec", return_value=("未知规格", "ax")),
                 mock.patch.object(fill_module, "irregular_pause"),
                 mock.patch.object(
@@ -1379,10 +1841,10 @@ print(json.dumps(payload, ensure_ascii=False))
         cleanup = {"ok": True, "strategy": "binding", "closed_window_ids": [9], "remaining_window_ids": []}
         with (
             mock.patch.object(module, "start_chrome_task_session", return_value=session),
-            mock.patch.object(module, "open_page"),
+            mock.patch.object(module, "open_page_for_session"),
             mock.patch.object(module, "irregular_pause"),
-            mock.patch.object(module, "focus_comment_window_if_possible"),
-            mock.patch.object(module, "wait_for_front_window", side_effect=[{"elements": []}, {"elements": []}]),
+            mock.patch.object(module, "focus_qianfan_task_session"),
+            mock.patch.object(module, "wait_for_session_front_window", side_effect=[{"elements": []}, {"elements": []}]),
             mock.patch.object(module, "bind_chrome_task_session"),
             mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
             mock.patch.object(module, "set_front_window_element_value"),
@@ -1406,6 +1868,60 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertEqual(payload["saved_file"], "/tmp/export.csv")
         self.assertEqual(payload["cleanup"], cleanup)
         close_mock.assert_called_once_with(session)
+
+    def test_sync_review_status_ax_flow_uses_owned_task_session(self) -> None:
+        spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        controls = {
+            "start_date_field": module.ChromeUiElement(11, "AXTextField", "", "", "", (0, 0), (10, 10)),
+            "end_date_field": module.ChromeUiElement(12, "AXTextField", "", "", "", (0, 0), (10, 10)),
+            "search_button": module.ChromeUiElement(13, "AXButton", "搜索", "", "", (0, 0), (10, 10)),
+            "export_button": module.ChromeUiElement(14, "AXButton", "全部导出", "", "", (0, 0), (10, 10)),
+        }
+        capture = {
+            "source_file": "/tmp/source.csv",
+            "saved_file": "/tmp/export.csv",
+            "saved_at": "20260531-170000",
+        }
+        profile = mock.Mock(directory="Profile 34", name="朝仓里服饰")
+        session = mock.Mock()
+        cleanup = {"ok": True, "strategy": "owned_tabs_only", "closed_targets": ["202#4002"], "remaining_targets": []}
+        with (
+            mock.patch.object(module, "start_chrome_task_session", return_value=session) as start_mock,
+            mock.patch.object(module, "open_page_for_session"),
+            mock.patch.object(module, "irregular_pause"),
+            mock.patch.object(module, "focus_qianfan_task_session"),
+            mock.patch.object(module, "wait_for_session_front_window", side_effect=[{"elements": []}, {"elements": []}]),
+            mock.patch.object(module, "bind_chrome_task_session"),
+            mock.patch.object(module, "locate_comment_page_controls", return_value=controls),
+            mock.patch.object(module, "set_front_window_element_value"),
+            mock.patch.object(module, "press_front_window_element"),
+            mock.patch.object(module, "wait_for_export_capture", return_value=capture),
+            mock.patch.object(module, "close_opened_comment_window", return_value=cleanup),
+        ):
+            payload = module.export_store_via_ax(
+                store_name="朝仓里服饰",
+                profile=profile,
+                start_date="2026-05-30",
+                end_date="2026-06-08",
+                desktop_dir=Path("/tmp/Desktop"),
+                downloads_dir=Path("/tmp/Downloads"),
+                output_dir=Path("/tmp/saved"),
+                export_start_timeout_seconds=60,
+                export_timeout_seconds=120,
+            )
+
+        start_mock.assert_called_once_with(
+            target_url_contains=module.PAGE_URLS["comments"],
+            profile_directory="Profile 34",
+            page_key="comments",
+            cleanup_scope="owned_tabs_only",
+        )
+        self.assertEqual(payload["cleanup"], cleanup)
 
     def test_sync_review_status_safe_window_close_never_breaks_main_flow(self) -> None:
         spec = importlib.util.spec_from_file_location("sync_feishu_review_status", SYNC_REVIEW_STATUS_SCRIPT)
@@ -2162,6 +2678,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "README.md", "远端必须和治理配置里的正式 SSH 地址一致"),
             (REPO_ROOT / "README.md", "调试截图"),
             (REPO_ROOT / "README.md", "不需要你每天重新安装或手动触发"),
+            (REPO_ROOT / "README.md", "Qianfan Window Guard"),
+            (REPO_ROOT / "README.md", "docs/qianfan_window_guard.md"),
             (REPO_ROOT / "AGENTS.md", "只允许连接对方正式入口"),
             (REPO_ROOT / "AGENTS.md", "飞书好评图片导出"),
             (REPO_ROOT / "AGENTS.md", "不要要求用户提供命令行"),
@@ -2201,6 +2719,8 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "HANDOVER.md", "docs/xhs_qianfan_safety.md"),
             (REPO_ROOT / "HANDOVER.md", "默认固定先按 `云端正式站 -> 本机正式站 -> 本机权限例外站` 评估"),
             (REPO_ROOT / "HANDOVER.md", "必须同时补自动恢复方案"),
+            (REPO_ROOT / "HANDOVER.md", "Qianfan Window Guard"),
+            (REPO_ROOT / "HANDOVER.md", "scripts/check_qianfan_window_guard.py"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_qianfan_guardrails.json"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "xhs_order_query_profiles.json"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "AX -> browser_js -> mouse"),
@@ -2212,6 +2732,10 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             (REPO_ROOT / "docs/workspace_maintenance.md", "正式运行统一走“正式版本目录 + 本机自动恢复守护”"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "用户会话拉起 + 轻量 watchdog"),
             (REPO_ROOT / "docs/workspace_maintenance.md", "不允许偷偷把新网站做成第 4 套、第 5 套长期运行方案"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "Qianfan Window Guard"),
+            (REPO_ROOT / "docs/workspace_maintenance.md", "docs/qianfan_window_guard.md"),
+            (REPO_ROOT / "docs/qianfan_window_guard.md", "任务自己打开的 Chrome 窗口，任务结束后自己关闭"),
+            (REPO_ROOT / "docs/qianfan_window_guard.md", "scripts/check_qianfan_window_guard.py"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "默认每轮不超过 5 单"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "固定节奏连续查询"),
             (REPO_ROOT / "docs/xhs_qianfan_safety.md", "先在飞书或别的外部表里把目标订单缩小到最少"),

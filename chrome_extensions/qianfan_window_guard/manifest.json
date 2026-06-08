@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Qianfan Window Guard",
+  "version": "0.1.0",
+  "description": "Track and close only Chrome windows opened by automation tasks.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Qianfan Window Guard"
+  },
+  "options_page": "panel.html"
+}
