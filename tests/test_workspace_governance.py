@@ -706,6 +706,50 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertTrue(cleanup["ok"])
         self.assertEqual(cleanup["closed_targets"], ["176962561#176962564"])
 
+    def test_qianfan_session_cleanup_without_owned_tabs_falls_back_to_window_diff(self) -> None:
+        access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-2b",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 32",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[],
+            baseline_window_signatures={("旧窗口", access_module.PAGE_URLS["orders"]): 1},
+            ownership_registered=True,
+        )
+
+        with (
+            mock.patch.object(session_module, "list_tab_descriptors", return_value=[]),
+            mock.patch.object(
+                session_module,
+                "close_new_windows_for_url_ax",
+                return_value={
+                    "ok": True,
+                    "skipped": False,
+                    "reason": "",
+                    "closed_window_ids": [],
+                    "remaining_window_ids": [],
+                    "closed_targets": ["501:9001"],
+                    "remaining_targets": [],
+                },
+            ) as fallback_mock,
+        ):
+            cleanup = session_module.close_qianfan_task_session(session)
+
+        fallback_mock.assert_called_once_with(
+            session.baseline_window_signatures,
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            log_step=mock.ANY,
+            app_name=access_module.CHROME_APP_NAME,
+        )
+        self.assertTrue(cleanup["ok"])
+        self.assertEqual(cleanup["cleanup_status"], "closed")
+        self.assertEqual(cleanup["strategy"], "window_diff_fallback")
+        self.assertEqual(cleanup["closed_targets"], ["501:9001"])
+
     def test_review_status_cleanup_warning_keeps_business_success(self) -> None:
         module = load_module("run_review_status_sync", RUN_REVIEW_STATUS_SCRIPT)
 
@@ -2310,6 +2354,37 @@ print(json.dumps(payload, ensure_ascii=False))
         self.assertEqual(summary["warning_count"], 1)
         self.assertEqual(summary["warnings"][0]["store_name"], "考拉小姐慢慢来")
         self.assertEqual(summary["warnings"][0]["reason"], "ownership_lost")
+
+    def test_run_review_status_skipped_cleanup_does_not_count_as_closed(self) -> None:
+        script = RUN_REVIEW_STATUS_SCRIPT
+        spec = importlib.util.spec_from_file_location("run_review_status_sync", script)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        summary = module.summarize_cleanup_results(
+            [
+                {
+                    "store_name": "抱树的koala小姐",
+                    "export": {
+                        "cleanup": {
+                            "ok": True,
+                            "skipped": True,
+                            "cleanup_status": "not_needed",
+                            "reason": "owned_tab_unconfirmed_but_no_residue",
+                            "strategy": "owned_tabs_only",
+                            "remaining_window_ids": [],
+                            "remaining_targets": [],
+                            "binding_window_id": None,
+                        }
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(summary["ok_count"], 0)
+        self.assertEqual(summary["warning_count"], 0)
 
     def test_run_sku_fill_auto_notification_messages_and_retry_gate(self) -> None:
         script = RUN_SKU_AUTO_SCRIPT

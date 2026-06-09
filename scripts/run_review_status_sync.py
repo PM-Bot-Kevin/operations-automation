@@ -142,8 +142,10 @@ def summarize_cleanup_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         cleanup = export_payload.get("cleanup")
         if not isinstance(cleanup, dict):
             continue
-        if cleanup.get("ok"):
+        if cleanup.get("ok") and not cleanup.get("skipped", False):
             ok_count += 1
+            continue
+        if cleanup.get("ok") and cleanup.get("skipped", False):
             continue
         warnings.append(
             {

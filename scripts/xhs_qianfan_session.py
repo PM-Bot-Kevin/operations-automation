@@ -18,12 +18,14 @@ from xhs_qianfan_access import (
     CHROME_APP_NAME,
     PAGE_URLS,
     activate_tab_by_id,
+    close_new_windows_for_url_ax,
     close_tab_by_id,
     front_window_active_tab_descriptor,
     list_tab_descriptors,
     list_window_snapshots,
     open_page,
     raise_window,
+    snapshot_window_signature_counts_optional,
     wait_for_front_window,
 )
 
@@ -221,6 +223,7 @@ class QianfanTaskSession:
     page_key: str
     target_url_contains: str
     baseline_tabs: list[dict[str, Any]]
+    baseline_window_signatures: dict[tuple[str, str], int] | None = None
     cleanup_scope: str = "owned_tabs_only"
     owned_tabs: list[dict[str, Any]] = field(default_factory=list)
     attached_window: dict[str, Any] | None = None
@@ -279,6 +282,7 @@ def start_qianfan_task_session(
         baseline_tabs = list_tab_descriptors(app_name)
     except Exception:
         baseline_tabs = []
+    baseline_window_signatures = snapshot_window_signature_counts_optional(app_name)
     return QianfanTaskSession(
         session_id=uuid4().hex,
         app_name=app_name,
@@ -286,6 +290,7 @@ def start_qianfan_task_session(
         page_key=page_key,
         target_url_contains=target_url_contains,
         baseline_tabs=baseline_tabs,
+        baseline_window_signatures=baseline_window_signatures,
         cleanup_scope=cleanup_scope,
     )
 
@@ -450,10 +455,13 @@ def close_qianfan_task_session(
         register_owned_tabs(session, log_step=log_step)
 
     if not session.owned_tabs:
+        tab_snapshot_error: Exception | None = None
         try:
             current_tabs = list_tab_descriptors(session.app_name)
-        except Exception:
+        except Exception as exc:
+            tab_snapshot_error = exc
             current_tabs = []
+            emit(f"读取标签页快照失败，改走窗口差异兜底：{exc}")
         baseline_keys = {_tab_key(item) for item in session.baseline_tabs}
         current_extra_tabs = [item for item in current_tabs if _tab_key(item) not in baseline_keys]
         lingering_targets = [
@@ -461,6 +469,39 @@ def close_qianfan_task_session(
             for item in current_extra_tabs
             if _tab_matches_target(item, session.target_url_contains)
         ]
+        if session.baseline_window_signatures is not None:
+            fallback = close_new_windows_for_url_ax(
+                session.baseline_window_signatures,
+                target_url_contains=session.target_url_contains,
+                log_step=log_step,
+                app_name=session.app_name,
+            )
+            fallback["strategy"] = "window_diff_fallback"
+            fallback["binding_window_id"] = None
+            closed_targets = list(fallback.get("closed_targets", []))
+            remaining_targets = list(fallback.get("remaining_targets", []))
+            if closed_targets:
+                fallback["cleanup_status"] = "closed"
+                fallback["skipped"] = False
+                return fallback
+            if remaining_targets:
+                fallback["cleanup_status"] = "warning"
+                fallback["skipped"] = bool(fallback.get("skipped", False))
+                return fallback
+            if tab_snapshot_error is not None:
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "cleanup_status": "warning",
+                    "reason": "tab_snapshot_failed",
+                    "strategy": "window_diff_fallback",
+                    "closed_window_ids": [],
+                    "remaining_window_ids": [],
+                    "closed_targets": [],
+                    "remaining_targets": [],
+                    "binding_window_id": None,
+                    "error": str(tab_snapshot_error),
+                }
         if not lingering_targets:
             emit("没有登记到本轮自建标签页，但当前也没有残留新标签页")
             return {
