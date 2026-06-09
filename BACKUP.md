@@ -19,9 +19,11 @@ bash scripts/github_backup.sh
 
 - 只允许从 `main` 备份
 - 只允许推送到治理配置里那一个正式 GitHub SSH 远端
+- 备份前会先自动刷新一次私密钥匙加密包
 - 如果没有代码改动，不会制造空提交
 - 如果有改动，会自动提交并推送到 `origin/main`
 - 如果发现 `runtime/`、`releases/`、`release-log/`、`.github_backup_logs/`、`current`、`.tmp/`、`.next/`、调试截图、根目录临时导出物，或文件名里带 `secret` / `token` / `credential` 的内容，会直接拒绝备份
+- 唯一例外是正式私密钥匙恢复文件：`docs/secret_recovery_bundle.md`、`scripts/maintenance/secret_recovery_manifest.txt`、配套脚本，以及 `recovery/secret-bundles/secret-recovery-bundle-latest.tar.gz.enc(.sha256)`
 
 ## 自动备份
 
@@ -74,5 +76,13 @@ bash scripts/install_backup_launchagent.sh
 - 根目录临时导出物
 - 文件名里明显带 `secret`、`token`、`credential` 的内容
 - 缓存、日志、临时文件
+
+正式例外：
+
+- `recovery/secret-bundles/secret-recovery-bundle-latest.tar.gz.enc`
+- `recovery/secret-bundles/secret-recovery-bundle-latest.tar.gz.enc.sha256`
+- 这套加密恢复方案的 manifest / 脚本 / 说明文档
+
+这些是“加密后的恢复材料”和“恢复流程文档”，不是原始密钥。
 
 这些规则已经由 `.gitignore`、备份脚本和治理校验共同限制。

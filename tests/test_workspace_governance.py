@@ -527,6 +527,10 @@ class WorkspaceGovernanceTests(unittest.TestCase):
                     {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
                     {"window_id": 101, "tab_id": 2002, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "新标签"},
                 ],
+                [
+                    {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
+                    {"window_id": 101, "tab_id": 2002, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "新标签"},
+                ],
             ],
         ):
             session = session_module.start_qianfan_task_session(
@@ -551,6 +555,10 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             "list_tab_descriptors",
             side_effect=[
                 [{"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"}],
+                [
+                    {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
+                    {"window_id": 101, "tab_id": 2002, "tab_url": "", "tab_title": "新标签"},
+                ],
                 [
                     {"window_id": 101, "tab_id": 1001, "tab_url": access_module.PAGE_URLS["comments"], "tab_title": "旧标签"},
                     {"window_id": 101, "tab_id": 2002, "tab_url": "", "tab_title": "新标签"},
@@ -907,6 +915,7 @@ else:
                     "1",
                 ],
                 cwd=REPO_ROOT,
+                env={**os.environ, "OPERATIONS_AUTOMATION_FEISHU_BASE_TOKEN": "test-base-token"},
                 capture_output=True,
                 text=True,
                 check=True,
@@ -1022,6 +1031,7 @@ print(json.dumps(payload, ensure_ascii=False))
                     "json",
                 ],
                 cwd=REPO_ROOT,
+                env={**os.environ, "OPERATIONS_AUTOMATION_FEISHU_BASE_TOKEN": "test-base-token"},
                 capture_output=True,
                 text=True,
                 check=True,
@@ -1499,6 +1509,7 @@ print(json.dumps(payload, ensure_ascii=False))
                     "json",
                 ],
                 cwd=REPO_ROOT,
+                env={**os.environ, "OPERATIONS_AUTOMATION_FEISHU_BASE_TOKEN": "test-base-token"},
                 capture_output=True,
                 text=True,
                 check=True,
@@ -2800,6 +2811,7 @@ print(json.dumps({"ok": True, "data": {"record_id": record_id}}, ensure_ascii=Fa
             completed = subprocess.run(
                 ["/bin/bash", str(repo_dir / "scripts" / "github_backup.sh")],
                 cwd=repo_dir,
+                env={**os.environ, "SECRET_RECOVERY_AUTO_REFRESH": "0"},
                 capture_output=True,
                 text=True,
             )

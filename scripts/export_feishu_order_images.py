@@ -14,8 +14,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from feishu_secret_config import FEISHU_BASE_TOKEN_ENV_VARS, resolve_feishu_base_token
 
-DEFAULT_BASE_TOKEN = "W0XvbodVPaE854sF42IcnHkIn1d"
 DEFAULT_TABLE_ID = "tblUM8AqYDNWvg7z"
 DEFAULT_VIEW_ID = "vewbrIBKXE"
 DEFAULT_ORDER_FIELD = "订单号"
@@ -46,7 +46,11 @@ class DateWindow:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="按自然语言日期条件，从飞书下载好评图片到桌面。")
     parser.add_argument("query", nargs="*", help="例如：帮我导出今天要上的好评")
-    parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN, help="飞书多维表格 base token")
+    parser.add_argument(
+        "--base-token",
+        default="",
+        help=f"飞书多维表格 base token；默认读环境变量 {FEISHU_BASE_TOKEN_ENV_VARS[0]}。",
+    )
     parser.add_argument("--table-id", default=DEFAULT_TABLE_ID, help="飞书数据表 table id")
     parser.add_argument("--view-id", default=DEFAULT_VIEW_ID, help="飞书视图 id")
     parser.add_argument("--order-field", default=DEFAULT_ORDER_FIELD, help="订单号字段名")
@@ -304,6 +308,10 @@ def download_image(
 
 def export_images(args: argparse.Namespace) -> tuple[Path | None, int, DateWindow]:
     lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+    try:
+        base_token = resolve_feishu_base_token(args.base_token)
+    except RuntimeError as exc:
+        raise ExportError(str(exc)) from exc
     image_fields = args.image_fields or list(DEFAULT_IMAGE_FIELDS)
     today = date.fromisoformat(args.today) if args.today else date.today()
     window = parse_date_window(" ".join(args.query), today)
@@ -312,7 +320,7 @@ def export_images(args: argparse.Namespace) -> tuple[Path | None, int, DateWindo
 
     records = fetch_records(
         lark_cli_bin,
-        base_token=args.base_token,
+        base_token=base_token,
         table_id=args.table_id,
         view_id=args.view_id,
         order_field=args.order_field,

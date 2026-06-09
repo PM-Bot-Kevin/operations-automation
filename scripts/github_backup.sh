@@ -13,6 +13,8 @@ LABEL="${BACKUP_LABEL:-com.luogic.operations-automation.github-backup}"
 STATE_DIR="${BACKUP_STATE_DIR:-$HOME/Library/Application Support/repo-backup-monitor}"
 STATE_FILE="${BACKUP_STATE_FILE:-$STATE_DIR/${LABEL}.json}"
 LOG_DIR="${BACKUP_LOG_DIR:-$REPO_ROOT/.github_backup_logs}"
+SECRET_RECOVERY_AUTO_REFRESH="${SECRET_RECOVERY_AUTO_REFRESH:-1}"
+SECRET_RECOVERY_REFRESH_SCRIPT="${SECRET_RECOVERY_REFRESH_SCRIPT:-$REPO_ROOT/scripts/maintenance/refresh_secret_recovery_bundle.sh}"
 
 GIT_BIN="${GIT_BIN:-$(command -v git || echo /usr/bin/git)}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo /usr/bin/python3)}"
@@ -75,6 +77,15 @@ FORBIDDEN_KEYWORDS=(
   "private_key"
   "apikey"
   "api-key"
+)
+
+ALLOWED_SECRET_RECOVERY_PATH_PREFIXES=(
+  "docs/secret_recovery_bundle.md"
+  "scripts/maintenance/secret_recovery_manifest.txt"
+  "scripts/maintenance/build_secret_recovery_bundle.sh"
+  "scripts/maintenance/refresh_secret_recovery_bundle.sh"
+  "scripts/maintenance/install_secret_recovery_passphrase.sh"
+  "recovery/secret-bundles/"
 )
 
 now() {
@@ -239,6 +250,20 @@ stage_changes() {
   "$GIT_BIN" add -A
 }
 
+is_allowed_secret_recovery_path() {
+  local path="$1"
+  local path_lower=""
+  local prefix=""
+
+  path_lower="$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')"
+  for prefix in "${ALLOWED_SECRET_RECOVERY_PATH_PREFIXES[@]}"; do
+    if [[ "$path_lower" == "$prefix"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 is_forbidden_path() {
   local path="$1"
   local path_lower=""
@@ -275,6 +300,10 @@ is_forbidden_path() {
     fi
   done
 
+  if is_allowed_secret_recovery_path "$path"; then
+    return 1
+  fi
+
   for keyword in "${FORBIDDEN_KEYWORDS[@]}"; do
     if [[ "$path_lower" == *"$keyword"* ]]; then
       return 0
@@ -297,6 +326,25 @@ ensure_no_forbidden_staged_paths() {
   if [[ "${#forbidden_paths[@]}" -gt 0 ]]; then
     "$GIT_BIN" reset -q HEAD -- "${forbidden_paths[@]}" >/dev/null 2>&1 || true
     fail "拒绝备份这些内容，请先处理后再试: ${forbidden_paths[*]}" 1
+  fi
+}
+
+refresh_secret_recovery_bundle_if_needed() {
+  [[ "$SECRET_RECOVERY_AUTO_REFRESH" == "1" ]] || return 0
+  if [[ ! -x "$SECRET_RECOVERY_REFRESH_SCRIPT" ]]; then
+    fail "私密钥匙加密包刷新脚本不可执行：$SECRET_RECOVERY_REFRESH_SCRIPT" 1
+  fi
+
+  local output=""
+  trap - ERR
+  set +e
+  output="$("$SECRET_RECOVERY_REFRESH_SCRIPT" 2>&1)"
+  local exit_code=$?
+  set -e
+  trap 'on_error $? $LINENO' ERR
+
+  if (( exit_code != 0 )); then
+    fail "私密钥匙加密包刷新失败：$output" 1
   fi
 }
 
@@ -325,6 +373,7 @@ write_state
 
 ensure_main_branch
 ensure_remote_uses_ssh
+refresh_secret_recovery_bundle_if_needed
 stage_changes
 ensure_no_forbidden_staged_paths
 

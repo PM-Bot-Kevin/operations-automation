@@ -28,6 +28,7 @@ SCRIPTS_DIR = CODE_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from feishu_secret_config import FEISHU_BASE_TOKEN_ENV_VARS, resolve_feishu_base_token
 from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     ChromeTaskSession,
@@ -53,7 +54,6 @@ from xhs_qianfan_session import (
 )
 
 
-DEFAULT_BASE_TOKEN = "W0XvbodVPaE854sF42IcnHkIn1d"
 DEFAULT_TABLE_ID = "tblUM8AqYDNWvg7z"
 DEFAULT_VIEW_ID = "vewbrIBKXE"
 DEFAULT_STORE_FIELD = "店铺"
@@ -104,7 +104,11 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     plan_parser = subparsers.add_parser("plan", help="拉取飞书里上评日期早于今天且未勾选已上评的记录")
-    plan_parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN)
+    plan_parser.add_argument(
+        "--base-token",
+        default="",
+        help=f"飞书多维表格 base token；默认读环境变量 {FEISHU_BASE_TOKEN_ENV_VARS[0]}。",
+    )
     plan_parser.add_argument("--table-id", default=DEFAULT_TABLE_ID)
     plan_parser.add_argument("--view-id", default=DEFAULT_VIEW_ID)
     plan_parser.add_argument("--store-field", default=DEFAULT_STORE_FIELD)
@@ -133,7 +137,11 @@ def parse_args() -> argparse.Namespace:
     reconcile_parser.add_argument("--export-file", required=True)
     reconcile_parser.add_argument("--store", default="")
     reconcile_parser.add_argument("--checked-field", default=DEFAULT_CHECKED_FIELD)
-    reconcile_parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN)
+    reconcile_parser.add_argument(
+        "--base-token",
+        default="",
+        help=f"飞书多维表格 base token；默认读环境变量 {FEISHU_BASE_TOKEN_ENV_VARS[0]}。",
+    )
     reconcile_parser.add_argument("--table-id", default=DEFAULT_TABLE_ID)
     reconcile_parser.add_argument("--apply", action="store_true")
     reconcile_parser.add_argument("--format", choices=("text", "json"), default="text")
@@ -312,6 +320,10 @@ def fetch_records(
 
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+    try:
+        base_token = resolve_feishu_base_token(args.base_token)
+    except RuntimeError as exc:
+        raise ReviewSyncError(str(exc)) from exc
     guardrails = load_guardrails()
     execution_defaults = guardrails.get("execution_defaults", {})
     today = parse_today(args.today)
@@ -326,7 +338,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
 
     records = fetch_records(
         lark_cli_bin,
-        base_token=args.base_token,
+        base_token=base_token,
         table_id=args.table_id,
         view_id=args.view_id,
         store_field=args.store_field,
@@ -1271,9 +1283,13 @@ def reconcile_export(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.apply and updates:
         lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+        try:
+            base_token = resolve_feishu_base_token(args.base_token)
+        except RuntimeError as exc:
+            raise ReviewSyncError(str(exc)) from exc
         apply_updates(
             lark_cli_bin,
-            base_token=args.base_token,
+            base_token=base_token,
             table_id=args.table_id,
             checked_field=args.checked_field,
             updates=updates,

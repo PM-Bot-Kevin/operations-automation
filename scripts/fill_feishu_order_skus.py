@@ -20,6 +20,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from feishu_secret_config import FEISHU_BASE_TOKEN_ENV_VARS, resolve_feishu_base_token
 from xhs_qianfan_access import (
     DEFAULT_LOCAL_STATE_PATH,
     PAGE_URLS,
@@ -45,7 +46,6 @@ from xhs_qianfan_session import (
 )
 
 
-DEFAULT_BASE_TOKEN = "W0XvbodVPaE854sF42IcnHkIn1d"
 DEFAULT_TABLE_ID = "tblUM8AqYDNWvg7z"
 DEFAULT_VIEW_ID = "vewbrIBKXE"
 DEFAULT_STORE_FIELD = "店铺"
@@ -168,7 +168,11 @@ def parse_args() -> argparse.Namespace:
 
     plan_parser = subparsers.add_parser("plan", help="拉取飞书里缺 SKU 的订单，按店铺整理查询计划")
     plan_parser.add_argument("query", nargs="*", help="例如：帮我把好评表里的订单SKU补齐")
-    plan_parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN, help="飞书多维表格 base token")
+    plan_parser.add_argument(
+        "--base-token",
+        default="",
+        help=f"飞书多维表格 base token；默认读环境变量 {FEISHU_BASE_TOKEN_ENV_VARS[0]}。",
+    )
     plan_parser.add_argument("--table-id", default=DEFAULT_TABLE_ID, help="飞书数据表 table id")
     plan_parser.add_argument("--view-id", default=DEFAULT_VIEW_ID, help="飞书视图 id")
     plan_parser.add_argument("--store-field", default=DEFAULT_STORE_FIELD, help="店铺字段名")
@@ -220,7 +224,11 @@ def parse_args() -> argparse.Namespace:
 
     apply_parser = subparsers.add_parser("apply", help="把已经确认好的真实 SKU 写回飞书")
     apply_parser.add_argument("--input-file", required=True, help="JSON 文件，必须包含 record_id 和 sku_value")
-    apply_parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN, help="飞书多维表格 base token")
+    apply_parser.add_argument(
+        "--base-token",
+        default="",
+        help=f"飞书多维表格 base token；默认读环境变量 {FEISHU_BASE_TOKEN_ENV_VARS[0]}。",
+    )
     apply_parser.add_argument("--table-id", default=DEFAULT_TABLE_ID, help="飞书数据表 table id")
     apply_parser.add_argument("--sku-field", default=DEFAULT_SKU_FIELD, help="SKU 字段名")
     apply_parser.add_argument("--dry-run", action="store_true", help="只打印将要回写的内容，不真正执行")
@@ -744,6 +752,10 @@ def query_store_orders(args: argparse.Namespace) -> dict[str, Any]:
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     ensure_fill_intent(" ".join(args.query))
     lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+    try:
+        base_token = resolve_feishu_base_token(args.base_token)
+    except RuntimeError as exc:
+        raise FillSkuError(str(exc)) from exc
     guardrails = load_guardrails()
     profile_config_path = Path(args.store_profile_config).expanduser().resolve()
     store_profile_config = load_store_profile_config(profile_config_path)
@@ -754,7 +766,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     profiles = load_profiles(local_state_path)
     records = fetch_records(
         lark_cli_bin,
-        base_token=args.base_token,
+        base_token=base_token,
         table_id=args.table_id,
         view_id=args.view_id,
         store_field=args.store_field,
@@ -928,6 +940,10 @@ def apply_updates(args: argparse.Namespace) -> tuple[int, bool]:
         raise FillSkuError(f"找不到回写文件：{input_path}")
 
     lark_cli_bin = resolve_lark_cli(args.lark_cli_bin)
+    try:
+        base_token = resolve_feishu_base_token(args.base_token)
+    except RuntimeError as exc:
+        raise FillSkuError(str(exc)) from exc
     updates = load_updates(input_path)
     for item in updates:
         command = [
@@ -936,7 +952,7 @@ def apply_updates(args: argparse.Namespace) -> tuple[int, bool]:
             "--as",
             "bot",
             "--base-token",
-            args.base_token,
+            base_token,
             "--table-id",
             args.table_id,
             "--record-id",

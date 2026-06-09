@@ -41,6 +41,26 @@
       "path": "scripts/install_backup_launchagent.sh"
     },
     {
+      "label": "私密钥匙恢复清单",
+      "path": "scripts/maintenance/secret_recovery_manifest.txt"
+    },
+    {
+      "label": "私密钥匙加密打包脚本",
+      "path": "scripts/maintenance/build_secret_recovery_bundle.sh"
+    },
+    {
+      "label": "私密钥匙加密包刷新脚本",
+      "path": "scripts/maintenance/refresh_secret_recovery_bundle.sh"
+    },
+    {
+      "label": "私密钥匙解密口令安装脚本",
+      "path": "scripts/maintenance/install_secret_recovery_passphrase.sh"
+    },
+    {
+      "label": "私密钥匙恢复说明",
+      "path": "docs/secret_recovery_bundle.md"
+    },
+    {
       "label": "Git 忽略规则",
       "path": ".gitignore"
     },
@@ -189,8 +209,19 @@
         "EXPECTED_BRANCH=\"${BACKUP_EXPECTED_BRANCH:-main}\"",
         "git@github.com:",
         "治理配置缺少正式 GitHub SSH 远端",
+        "SECRET_RECOVERY_REFRESH_SCRIPT",
+        "refresh_secret_recovery_bundle_if_needed",
+        "recovery/secret-bundles/",
         ".artifacts/",
         "拒绝备份这些内容，请先处理后再试"
+      ]
+    },
+    {
+      "label": "私密钥匙恢复脚本必须固定口令路径和最新包名",
+      "path": "scripts/maintenance/refresh_secret_recovery_bundle.sh",
+      "must_contain": [
+        "secret-recovery-bundle-latest",
+        "operations-automation.secret-recovery-bundle.input.sha256"
       ]
     },
     {
@@ -233,6 +264,7 @@
       "must_contain": [
         "发布前固定自动先跑治理校验",
         "GitHub 是代码备份，不是真实业务数据备份",
+        "secret-recovery-bundle-latest.tar.gz.enc",
         "不允许默认连接仓库镜像、临时副本、worktree、历史目录、手工复制目录",
         "默认决策顺序固定是：`云端正式站 -> 本机正式站 -> 本机权限例外站`",
         "必须先得到用户明确确认，才允许新增第 4 类长期方案"
@@ -243,9 +275,19 @@
       "path": "HANDOVER.md",
       "must_contain": [
         "回滚只切代码版本，不碰 `runtime/`",
+        "私密钥匙加密包",
         "只能调用对方正式入口",
         "默认固定先按 `云端正式站 -> 本机正式站 -> 本机权限例外站` 评估",
         "必须同时补自动恢复方案"
+      ]
+    },
+    {
+      "label": "私密钥匙恢复说明必须写明共享口令和恢复顺序",
+      "path": "docs/secret_recovery_bundle.md",
+      "must_contain": [
+        "ai-copy-factory-secrets/secret-recovery-passphrase.txt",
+        "restore_manifest.tsv",
+        "Chrome 店铺登录态"
       ]
     },
     {

@@ -98,7 +98,19 @@ bash scripts/install_backup_launchagent.sh
 git@github.com:PM-Bot-Kevin/operations-automation.git
 ```
 
+- 备份前会先自动刷新私密钥匙加密包，最新文件固定是：
+  - `recovery/secret-bundles/secret-recovery-bundle-latest.tar.gz.enc`
+  - `recovery/secret-bundles/secret-recovery-bundle-latest.tar.gz.enc.sha256`
+
 详细说明见 [BACKUP.md](/Users/luogic/Code/运营自动化/BACKUP.md)。
+
+## 私密钥匙恢复
+
+- 清单：`scripts/maintenance/secret_recovery_manifest.txt`
+- 打包：`zsh scripts/maintenance/build_secret_recovery_bundle.sh --passphrase-file <本机口令文件>`
+- 刷新：`zsh scripts/maintenance/refresh_secret_recovery_bundle.sh`
+- 本机口令安装：`zsh scripts/maintenance/install_secret_recovery_passphrase.sh --passphrase-file <本机口令文件>`
+- 说明：[私密钥匙灾备说明](/Users/luogic/Code/运营自动化/docs/secret_recovery_bundle.md)
 
 ## 飞书图片整理
 

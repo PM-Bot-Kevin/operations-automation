@@ -32,7 +32,16 @@ bash scripts/rollback_workspace.sh --to <release-id>
 python3 scripts/show_release_history.py
 bash scripts/github_backup.sh
 bash scripts/install_backup_launchagent.sh
+zsh scripts/maintenance/refresh_secret_recovery_bundle.sh
 ```
+
+## 私密钥匙加密包
+
+- 这个仓库已经接入和 `AI生文工厂` 同口令的私密钥匙加密包方案。
+- 正式清单固定看 `scripts/maintenance/secret_recovery_manifest.txt`。
+- GitHub 备份前会先自动刷新最新加密包；如果内容没变，不会重复改包。
+- 解密口令文件固定是 `/Users/luogic/Library/Application Support/ai-copy-factory-secrets/secret-recovery-passphrase.txt`，不要写进仓库、日志或文档。
+- 恢复顺序固定看 [docs/secret_recovery_bundle.md](/Users/luogic/Code/运营自动化/docs/secret_recovery_bundle.md)。
 
 ## 已固化业务能力
 
@@ -117,6 +126,7 @@ bash scripts/install_backup_launchagent.sh
 - GitHub 备份和自动安装都要继续对齐 `config/workspace_governance.json` 里的正式 SSH 远端，不要只校验“是不是 GitHub SSH”
 - 自动备份默认由 macOS `launchd` 执行
 - GitHub 是代码备份，不是真实业务数据备份
+- GitHub 自动备份前要先刷新私密钥匙加密包
 - `runtime/`、`releases/`、`release-log/`、`.github_backup_logs/`、`current`、`.tmp/`、`.next/`、调试截图、根目录临时导出物，以及名字里带 `secret` / `token` / `credential` 的内容都不能进 GitHub
 - 当前 GitHub SSH 远端固定为 `git@github.com:PM-Bot-Kevin/operations-automation.git`
 
