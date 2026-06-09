@@ -75,6 +75,24 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             self.assertIn("--new-window", module.open_page(resolved, "orders", dry_run=True))
             self.assertIn("app-item/comment/analysis", module.open_page(resolved, "comments", dry_run=True))
 
+    def test_qianfan_access_builds_guard_bridge_url(self) -> None:
+        module = load_module("xhs_qianfan_access_guard_bridge", QIANFAN_ACCESS_SCRIPT)
+
+        url = module.build_guard_bridge_url(
+            "bcfcfgincfgogkgcnmjboophiiakefek",
+            action="open_auto_close",
+            task_id="task-123",
+            target_url=module.PAGE_URLS["comments"],
+            auto_close_ms=60000,
+            close_self=True,
+        )
+
+        self.assertIn("chrome-extension://bcfcfgincfgogkgcnmjboophiiakefek/panel.html", url)
+        self.assertIn("action=open_auto_close", url)
+        self.assertIn("taskId=task-123", url)
+        self.assertIn("autoCloseMs=60000", url)
+        self.assertIn("closeSelf=1", url)
+
     def test_qianfan_access_element_center_uses_position_and_size(self) -> None:
         module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
 
@@ -583,6 +601,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
 
         session = session_module.QianfanTaskSession(
             session_id="session-1",
+            task_id="task-1",
             app_name=access_module.CHROME_APP_NAME,
             profile_directory="Profile 32",
             page_key="comments",
@@ -593,7 +612,11 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(session_module, "open_page") as open_mock,
+            mock.patch.object(
+                session_module,
+                "open_guarded_page",
+                return_value={"extension_id": "guard-ext", "task_id": "task-1"},
+            ) as guard_open_mock,
             mock.patch.object(
                 session_module,
                 "list_tab_descriptors",
@@ -614,7 +637,13 @@ class WorkspaceGovernanceTests(unittest.TestCase):
                 title_hint="抱树的koala小姐",
             )
 
-        open_mock.assert_called_once_with(mock.ANY, "comments", dry_run=False)
+        guard_open_mock.assert_called_once_with(
+            profile_directory="Profile 32",
+            target_url=access_module.PAGE_URLS["comments"],
+            task_id="task-1",
+            auto_close_ms=600000,
+            dry_run=False,
+        )
         self.assertEqual(
             session.owned_tabs,
             [
@@ -626,7 +655,9 @@ class WorkspaceGovernanceTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(session.launch_strategy, "owned_window_per_task")
+        self.assertEqual(session.launch_strategy, "guard_bridge_owned_window")
+        self.assertTrue(session.guard_managed)
+        self.assertEqual(session.guard_extension_id, "guard-ext")
 
     def test_qianfan_session_open_page_falls_back_to_unique_new_tab_before_target_url_ready(self) -> None:
         access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
@@ -634,6 +665,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
 
         session = session_module.QianfanTaskSession(
             session_id="session-1b",
+            task_id="task-1b",
             app_name=access_module.CHROME_APP_NAME,
             profile_directory="Profile 34",
             page_key="comments",
@@ -644,7 +676,11 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         )
 
         with (
-            mock.patch.object(session_module, "open_page"),
+            mock.patch.object(
+                session_module,
+                "open_guarded_page",
+                return_value={"extension_id": "guard-ext", "task_id": "task-1b"},
+            ),
             mock.patch.object(
                 session_module,
                 "list_tab_descriptors",
@@ -681,6 +717,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
 
         session = session_module.QianfanTaskSession(
             session_id="session-2",
+            task_id="task-2",
             app_name=access_module.CHROME_APP_NAME,
             profile_directory="Profile 32",
             page_key="comments",
@@ -712,6 +749,7 @@ class WorkspaceGovernanceTests(unittest.TestCase):
 
         session = session_module.QianfanTaskSession(
             session_id="session-2b",
+            task_id="task-2b",
             app_name=access_module.CHROME_APP_NAME,
             profile_directory="Profile 32",
             page_key="comments",
@@ -749,6 +787,80 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertEqual(cleanup["cleanup_status"], "closed")
         self.assertEqual(cleanup["strategy"], "window_diff_fallback")
         self.assertEqual(cleanup["closed_targets"], ["501:9001"])
+
+    def test_qianfan_session_cleanup_prefers_guard_task_close(self) -> None:
+        access_module = load_module("xhs_qianfan_access_cleanup_guard", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session_cleanup_guard", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-guard",
+            task_id="task-guard",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 32",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[],
+            owned_tabs=[{"window_id": 88, "tab_id": 99, "tab_url": access_module.PAGE_URLS["comments"]}],
+            ownership_registered=True,
+            guard_managed=True,
+            guard_extension_id="guard-ext",
+        )
+
+        with (
+            mock.patch.object(session_module, "close_guarded_task_windows") as close_guard_mock,
+            mock.patch.object(
+                session_module,
+                "list_tab_descriptors",
+                side_effect=[
+                    [{"window_id": 700, "tab_id": 701, "tab_url": "chrome-extension://guard-ext/panel.html?action=close_task"}],
+                    [],
+                ],
+            ),
+        ):
+            cleanup = session_module.close_qianfan_task_session(session)
+
+        close_guard_mock.assert_called_once_with(
+            profile_directory="Profile 32",
+            task_id="task-guard",
+            dry_run=False,
+        )
+        self.assertTrue(cleanup["ok"])
+        self.assertEqual(cleanup["strategy"], "guard_bridge")
+        self.assertEqual(cleanup["closed_targets"], ["88#99"])
+
+    def test_qianfan_session_cleanup_marks_guard_close_as_closed_without_owned_tabs(self) -> None:
+        access_module = load_module("xhs_qianfan_access_cleanup_guard_status", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session_cleanup_guard_status", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-guard-status",
+            task_id="task-guard-status",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 32",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[],
+            ownership_registered=True,
+            guard_managed=True,
+            guard_extension_id="guard-ext",
+        )
+
+        with (
+            mock.patch.object(session_module, "close_guarded_task_windows") as close_guard_mock,
+            mock.patch.object(session_module, "list_tab_descriptors", side_effect=[[], []]),
+            mock.patch.object(session_module, "list_window_snapshots", return_value=[]),
+        ):
+            cleanup = session_module.close_qianfan_task_session(session)
+
+        close_guard_mock.assert_called_once_with(
+            profile_directory="Profile 32",
+            task_id="task-guard-status",
+            dry_run=False,
+        )
+        self.assertTrue(cleanup["ok"])
+        self.assertFalse(cleanup["skipped"])
+        self.assertEqual(cleanup["cleanup_status"], "closed")
+        self.assertEqual(cleanup["strategy"], "guard_bridge")
 
     def test_review_status_cleanup_warning_keeps_business_success(self) -> None:
         module = load_module("run_review_status_sync", RUN_REVIEW_STATUS_SCRIPT)
@@ -1975,6 +2087,7 @@ print(json.dumps(payload, ensure_ascii=False))
             profile_directory="Profile 34",
             page_key="comments",
             cleanup_scope="owned_tabs_only",
+            auto_close_ms=module.DEFAULT_QIANFAN_TASK_WINDOW_MS,
         )
         self.assertEqual(payload["cleanup"], cleanup)
 

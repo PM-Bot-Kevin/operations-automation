@@ -18,11 +18,13 @@ from xhs_qianfan_access import (
     CHROME_APP_NAME,
     PAGE_URLS,
     activate_tab_by_id,
+    close_guarded_task_windows,
     close_new_windows_for_url_ax,
     close_tab_by_id,
     front_window_active_tab_descriptor,
     list_tab_descriptors,
     list_window_snapshots,
+    open_guarded_page,
     open_page,
     raise_window,
     snapshot_window_signature_counts_optional,
@@ -64,6 +66,28 @@ def _tab_matches_target(descriptor: dict[str, Any], target_url_contains: str) ->
         or ""
     )
     return bool(target_url_contains) and target_url_contains in current_url
+
+
+def _tab_url(descriptor: dict[str, Any]) -> str:
+    return str(
+        descriptor.get("tab_url", "")
+        or descriptor.get("active_url", "")
+        or descriptor.get("url", "")
+        or ""
+    )
+
+
+def _is_guard_bridge_descriptor(descriptor: dict[str, Any], extension_id: str) -> bool:
+    if not extension_id:
+        return False
+    return _tab_url(descriptor).startswith(f"chrome-extension://{extension_id}/panel.html")
+
+
+def _is_guard_bridge_snapshot(snapshot: dict[str, Any], extension_id: str) -> bool:
+    if not extension_id:
+        return False
+    active_url = str(snapshot.get("active_url", "") or "")
+    return active_url.startswith(f"chrome-extension://{extension_id}/panel.html")
 
 
 def _find_profile_window_snapshot(title_hint: str) -> dict[str, Any] | None:
@@ -218,6 +242,7 @@ def cleanup_orphaned_owned_tabs(
 @dataclass
 class QianfanTaskSession:
     session_id: str
+    task_id: str
     app_name: str
     profile_directory: str
     page_key: str
@@ -225,11 +250,14 @@ class QianfanTaskSession:
     baseline_tabs: list[dict[str, Any]]
     baseline_window_signatures: dict[tuple[str, str], int] | None = None
     cleanup_scope: str = "owned_tabs_only"
+    auto_close_ms: int = 600000
     owned_tabs: list[dict[str, Any]] = field(default_factory=list)
     attached_window: dict[str, Any] | None = None
     title_hint: str = ""
     ownership_registered: bool = False
     launch_strategy: str = "owned_window_per_task"
+    guard_managed: bool = False
+    guard_extension_id: str = ""
 
 
 def _detect_new_owned_tabs(session: "QianfanTaskSession") -> list[dict[str, Any]]:
@@ -237,8 +265,13 @@ def _detect_new_owned_tabs(session: "QianfanTaskSession") -> list[dict[str, Any]
     baseline_keys = {_tab_key(item) for item in session.baseline_tabs}
     new_tabs = [item for item in current_tabs if _tab_key(item) not in baseline_keys]
     owned_tabs = [item for item in new_tabs if _tab_matches_target(item, session.target_url_contains)]
-    if not owned_tabs and len(new_tabs) == 1:
-        owned_tabs = list(new_tabs)
+    non_guard_tabs = [
+        item
+        for item in new_tabs
+        if not _is_guard_bridge_descriptor(item, session.guard_extension_id)
+    ]
+    if not owned_tabs and len(non_guard_tabs) == 1:
+        owned_tabs = list(non_guard_tabs)
     return owned_tabs
 
 
@@ -277,6 +310,7 @@ def start_qianfan_task_session(
     page_key: str,
     app_name: str = CHROME_APP_NAME,
     cleanup_scope: str = "owned_tabs_only",
+    auto_close_ms: int = 600000,
 ) -> QianfanTaskSession:
     try:
         baseline_tabs = list_tab_descriptors(app_name)
@@ -285,6 +319,7 @@ def start_qianfan_task_session(
     baseline_window_signatures = snapshot_window_signature_counts_optional(app_name)
     return QianfanTaskSession(
         session_id=uuid4().hex,
+        task_id=f"qianfan-task-{uuid4().hex}",
         app_name=app_name,
         profile_directory=profile_directory,
         page_key=page_key,
@@ -292,6 +327,7 @@ def start_qianfan_task_session(
         baseline_tabs=baseline_tabs,
         baseline_window_signatures=baseline_window_signatures,
         cleanup_scope=cleanup_scope,
+        auto_close_ms=max(0, int(auto_close_ms)),
     )
 
 
@@ -313,8 +349,28 @@ def open_page_for_session(
         active_tab = None
     cleanup_orphaned_owned_tabs(app_name=app_name, active_tab_guard=active_tab, log_step=log_step)
     session.title_hint = title_hint.strip()
-    open_page(profile, session.page_key, dry_run=False)
-    emit(f"已为本轮任务拉起独立窗口：{profile.directory} / {session.page_key}")
+    try:
+        guard_payload = open_guarded_page(
+            profile_directory=profile.directory,
+            target_url=PAGE_URLS[session.page_key],
+            task_id=session.task_id,
+            auto_close_ms=session.auto_close_ms,
+            dry_run=False,
+        )
+        session.guard_managed = True
+        session.guard_extension_id = str(guard_payload.get("extension_id", "") or "")
+        session.launch_strategy = "guard_bridge_owned_window"
+        emit(
+            f"已通过窗口守卫拉起独立窗口：{profile.directory} / {session.page_key} / "
+            f"task={session.task_id}"
+        )
+    except Exception as exc:
+        session.guard_managed = False
+        session.guard_extension_id = ""
+        session.launch_strategy = "owned_window_per_task"
+        emit(f"窗口守卫不可用，回退直接开页：{exc}")
+        open_page(profile, session.page_key, dry_run=False)
+        emit(f"已为本轮任务拉起独立窗口：{profile.directory} / {session.page_key}")
     owned_tabs = _wait_for_new_owned_tabs(session, log_step=log_step)
     if owned_tabs:
         session.owned_tabs = owned_tabs
@@ -451,6 +507,43 @@ def close_qianfan_task_session(
         if log_step is not None:
             log_step(message)
 
+    guard_close_attempted = False
+    if session.guard_managed and session.task_id:
+        try:
+            guard_close_attempted = True
+            close_guarded_task_windows(
+                profile_directory=session.profile_directory,
+                task_id=session.task_id,
+                dry_run=False,
+            )
+            emit(f"已请求窗口守卫回收本轮任务窗口：{session.task_id}")
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                current_tabs = list_tab_descriptors(session.app_name)
+                current_keys = {_tab_key(item) for item in current_tabs}
+                owned_keys = {_tab_key(item) for item in session.owned_tabs}
+                bridge_alive = any(
+                    _is_guard_bridge_descriptor(item, session.guard_extension_id) for item in current_tabs
+                )
+                if owned_keys and owned_keys.isdisjoint(current_keys) and not bridge_alive:
+                    _forget_owned_tab_keys(owned_keys)
+                    return {
+                        "ok": True,
+                        "skipped": False,
+                        "cleanup_status": "closed",
+                        "reason": "",
+                        "strategy": "guard_bridge",
+                        "closed_window_ids": [],
+                        "remaining_window_ids": [],
+                        "closed_targets": [f"{item['window_id']}#{item['tab_id']}" for item in session.owned_tabs],
+                        "remaining_targets": [],
+                        "binding_window_id": None,
+                    }
+                time.sleep(0.25)
+            emit("窗口守卫回收后仍检测到残留，改走本地兜底核验")
+        except Exception as exc:
+            emit(f"窗口守卫回收失败，改走本地兜底：{exc}")
+
     if not session.ownership_registered and not session.owned_tabs:
         register_owned_tabs(session, log_step=log_step)
 
@@ -504,16 +597,39 @@ def close_qianfan_task_session(
                 }
         if not lingering_targets:
             emit("没有登记到本轮自建标签页，但当前也没有残留新标签页")
+            guard_bridge_remaining = []
+            if session.guard_extension_id:
+                try:
+                    guard_bridge_remaining = [
+                        str(snapshot.get("window_title", "") or "")
+                        for snapshot in list_window_snapshots(session.app_name)
+                        if _is_guard_bridge_snapshot(snapshot, session.guard_extension_id)
+                    ]
+                except Exception:
+                    guard_bridge_remaining = []
+            if guard_close_attempted and not guard_bridge_remaining:
+                return {
+                    "ok": True,
+                    "skipped": False,
+                    "cleanup_status": "closed",
+                    "reason": "",
+                    "strategy": "guard_bridge",
+                    "closed_window_ids": [],
+                    "remaining_window_ids": [],
+                    "closed_targets": [],
+                    "remaining_targets": [],
+                    "binding_window_id": None,
+                }
             return {
-                "ok": True,
+                "ok": not guard_bridge_remaining,
                 "skipped": True,
-                "cleanup_status": "not_needed",
-                "reason": "owned_tab_unconfirmed_but_no_residue",
+                "cleanup_status": "warning" if guard_bridge_remaining else "not_needed",
+                "reason": "guard_bridge_remaining" if guard_bridge_remaining else "owned_tab_unconfirmed_but_no_residue",
                 "strategy": session.cleanup_scope,
                 "closed_window_ids": [],
                 "remaining_window_ids": [],
                 "closed_targets": [],
-                "remaining_targets": [],
+                "remaining_targets": guard_bridge_remaining,
                 "binding_window_id": None,
             }
         emit("没有确认到本轮自建标签页，本轮不做盲关")

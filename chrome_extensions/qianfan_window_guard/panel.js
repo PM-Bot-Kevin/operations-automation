@@ -3,6 +3,7 @@ const delayInput = document.getElementById("delay");
 const statusEl = document.getElementById("status");
 const DEFAULT_DELAY_MS = 60000;
 const LONG_TASK_DELAY_MS = 600000;
+const panelParams = new URLSearchParams(window.location.search);
 
 function setStatus(title, payload) {
   const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
@@ -48,6 +49,70 @@ function schedulePanelFallbackClose(windowId, autoCloseMs) {
       }
     }
   }, delay + 500);
+}
+
+function readPositiveInt(value, fallbackValue) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallbackValue;
+  }
+  return parsed;
+}
+
+function shouldCloseSelf() {
+  return panelParams.get("closeSelf") === "1";
+}
+
+function scheduleSelfClose() {
+  window.setTimeout(() => {
+    window.close();
+  }, 120);
+}
+
+async function runAutoActionFromQuery() {
+  const action = String(panelParams.get("action") || "").trim();
+  if (!action) {
+    return false;
+  }
+  const taskId = String(panelParams.get("taskId") || "").trim();
+  const targetUrl = String(panelParams.get("targetUrl") || "").trim();
+  const autoCloseMs = readPositiveInt(panelParams.get("autoCloseMs"), DEFAULT_DELAY_MS);
+  const closeSelfWindow = shouldCloseSelf();
+
+  if (targetUrl) {
+    urlInput.value = targetUrl;
+  }
+  delayInput.value = String(autoCloseMs);
+
+  if (action === "open_auto_close") {
+    const response = await guard({
+      type: "guard:open-window-and-auto-close",
+      url: targetUrl || urlInput.value,
+      autoCloseMs,
+      taskId,
+      closeSelfWindow
+    });
+    setStatus("桥接页已托管打开任务窗口", response);
+    if (closeSelfWindow) {
+      scheduleSelfClose();
+    }
+    return true;
+  }
+
+  if (action === "close_task") {
+    const response = await guard({
+      type: "guard:close-task-windows",
+      taskId,
+      closeSelfWindow
+    });
+    setStatus("桥接页已托管关闭任务窗口", response);
+    if (closeSelfWindow) {
+      scheduleSelfClose();
+    }
+    return true;
+  }
+
+  throw new Error(`Unsupported auto action: ${action}`);
 }
 
 document.getElementById("open-auto-close").addEventListener("click", async () => {
@@ -106,6 +171,13 @@ document.getElementById("preset-long").addEventListener("click", () => {
   setDelayPreset(LONG_TASK_DELAY_MS, "long_task_10m");
 });
 
-refreshList().catch((error) => {
-  setStatus("初始化失败", error.message);
-});
+(async () => {
+  try {
+    const autoRan = await runAutoActionFromQuery();
+    if (!autoRan) {
+      await refreshList();
+    }
+  } catch (error) {
+    setStatus("初始化失败", error.message);
+  }
+})();

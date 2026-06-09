@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -39,6 +40,7 @@ PAGE_URLS = {
     "aftersale": "https://ark.xiaohongshu.com/app-order/aftersale/list",
     "comments": "https://ark.xiaohongshu.com/app-item/comment/analysis",
 }
+QIANFAN_WINDOW_GUARD_PANEL_PATH = "panel.html"
 CORE_FOUNDATION_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 APPLICATION_SERVICES_PATH = "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
 CF_STRING_ENCODING_UTF8 = 0x08000100
@@ -229,9 +231,13 @@ def resolve_profile(profiles: list[ChromeProfile], store_query: str) -> ChromePr
 
 def open_page(profile: ChromeProfile, page: str, dry_run: bool) -> str:
     target_url = PAGE_URLS[page]
+    return open_url_in_profile(profile.directory, target_url, dry_run=dry_run)
+
+
+def open_url_in_profile(profile_directory: str, target_url: str, *, dry_run: bool = False) -> str:
     command = [
         CHROME_BINARY_PATH,
-        f"--profile-directory={profile.directory}",
+        f"--profile-directory={profile_directory}",
         "--new-window",
         target_url,
     ]
@@ -244,6 +250,99 @@ def open_page(profile: ChromeProfile, page: str, dry_run: bool) -> str:
         stderr=subprocess.DEVNULL,
     )
     return target_url
+
+
+def resolve_guard_extension(profile_directory: str) -> dict[str, Any]:
+    from check_qianfan_window_guard import detect_guard
+
+    payload = detect_guard(profile_directory)
+    if not payload.get("enabled"):
+        raise QianfanAccessError(f"当前 profile 未启用 Qianfan Window Guard：{profile_directory}")
+    matches = [item for item in payload.get("matches", []) if item.get("enabled")]
+    if not matches:
+        raise QianfanAccessError(f"当前 profile 没找到可用的 Qianfan Window Guard：{profile_directory}")
+    match = matches[0]
+    extension_id = str(match.get("extension_id", "") or "").strip()
+    if not extension_id:
+        raise QianfanAccessError(f"Qianfan Window Guard 缺少 extension id：{profile_directory}")
+    return {
+        "profile_directory": profile_directory,
+        "extension_id": extension_id,
+        "path": str(match.get("path", "") or ""),
+        "browser_js_allowed": payload.get("browser_js_allowed"),
+    }
+
+
+def build_guard_bridge_url(
+    extension_id: str,
+    *,
+    action: str,
+    task_id: str,
+    target_url: str = "",
+    auto_close_ms: int | None = None,
+    close_self: bool = True,
+) -> str:
+    params: dict[str, str] = {
+        "action": action,
+        "taskId": task_id,
+    }
+    if target_url:
+        params["targetUrl"] = target_url
+    if auto_close_ms is not None:
+        params["autoCloseMs"] = str(max(0, int(auto_close_ms)))
+    if close_self:
+        params["closeSelf"] = "1"
+    return f"chrome-extension://{extension_id}/{QIANFAN_WINDOW_GUARD_PANEL_PATH}?{urlencode(params)}"
+
+
+def open_guarded_page(
+    *,
+    profile_directory: str,
+    target_url: str,
+    task_id: str,
+    auto_close_ms: int,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    guard = resolve_guard_extension(profile_directory)
+    bridge_url = build_guard_bridge_url(
+        guard["extension_id"],
+        action="open_auto_close",
+        task_id=task_id,
+        target_url=target_url,
+        auto_close_ms=auto_close_ms,
+        close_self=True,
+    )
+    open_url_in_profile(profile_directory, bridge_url, dry_run=dry_run)
+    return {
+        "profile_directory": profile_directory,
+        "extension_id": guard["extension_id"],
+        "bridge_url": bridge_url,
+        "target_url": target_url,
+        "task_id": task_id,
+        "auto_close_ms": max(0, int(auto_close_ms)),
+    }
+
+
+def close_guarded_task_windows(
+    *,
+    profile_directory: str,
+    task_id: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    guard = resolve_guard_extension(profile_directory)
+    bridge_url = build_guard_bridge_url(
+        guard["extension_id"],
+        action="close_task",
+        task_id=task_id,
+        close_self=True,
+    )
+    open_url_in_profile(profile_directory, bridge_url, dry_run=dry_run)
+    return {
+        "profile_directory": profile_directory,
+        "extension_id": guard["extension_id"],
+        "bridge_url": bridge_url,
+        "task_id": task_id,
+    }
 
 
 def _run_osascript(lines: list[str], args: list[str] | None = None) -> str:

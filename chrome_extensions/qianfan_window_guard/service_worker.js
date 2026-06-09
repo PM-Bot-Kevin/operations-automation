@@ -2,6 +2,11 @@ const STORAGE_KEY = "ownedWindows";
 const DEFAULT_DELAY_MS = 60000;
 const ALARM_PREFIX = "close-owned-window:";
 
+function normalizeTaskId(value) {
+  const taskId = String(value || "").trim();
+  return taskId || "";
+}
+
 async function loadOwnedWindows() {
   const payload = await chrome.storage.local.get(STORAGE_KEY);
   const items = Array.isArray(payload[STORAGE_KEY]) ? payload[STORAGE_KEY] : [];
@@ -89,6 +94,35 @@ async function closeExpiredOwnedWindows(now = Date.now()) {
   return results;
 }
 
+async function listTaskOwnedWindows(taskId) {
+  const normalizedTaskId = normalizeTaskId(taskId);
+  if (!normalizedTaskId) {
+    return [];
+  }
+  const items = await pruneOwnedWindows();
+  return items.filter((item) => normalizeTaskId(item.taskId) === normalizedTaskId);
+}
+
+async function closeTaskOwnedWindows(taskId) {
+  const matched = await listTaskOwnedWindows(taskId);
+  const closed = [];
+  const remaining = [];
+  for (const item of matched) {
+    try {
+      await closeOwnedWindow(item.windowId);
+      closed.push(item);
+    } catch (_error) {
+      remaining.push(item);
+    }
+  }
+  return {
+    taskId: normalizeTaskId(taskId),
+    matched,
+    closed,
+    remaining
+  };
+}
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith(ALARM_PREFIX)) {
     return;
@@ -142,7 +176,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         focused: true,
         type: "normal"
       });
-      await registerOwnedWindow(createdWindow, { source: "guard_open_window" });
+      const taskId = normalizeTaskId(message.taskId);
+      await registerOwnedWindow(createdWindow, {
+        source: "guard_open_window",
+        ...(taskId ? { taskId } : {})
+      });
       const activeTab = Array.isArray(createdWindow.tabs)
         ? createdWindow.tabs.find((tab) => tab.active) || createdWindow.tabs[0] || null
         : null;
@@ -171,9 +209,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         focused: true,
         type: "normal"
       });
+      const taskId = normalizeTaskId(message.taskId);
       await registerOwnedWindow(createdWindow, {
         source: "guard_open_window_and_auto_close",
-        closeAt
+        closeAt,
+        ...(taskId ? { taskId } : {})
       });
       chrome.alarms.create(`${ALARM_PREFIX}${createdWindow.id}`, {
         when: closeAt
@@ -191,6 +231,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         },
         autoCloseMs,
         closeAt
+      });
+      return;
+    }
+    if (message.type === "guard:list-task-windows") {
+      const taskId = normalizeTaskId(message.taskId);
+      if (!taskId) {
+        throw new Error("taskId is required");
+      }
+      const items = await listTaskOwnedWindows(taskId);
+      sendResponse({ ok: true, taskId, items });
+      return;
+    }
+    if (message.type === "guard:close-task-windows") {
+      const taskId = normalizeTaskId(message.taskId);
+      if (!taskId) {
+        throw new Error("taskId is required");
+      }
+      const result = await closeTaskOwnedWindows(taskId);
+      sendResponse({
+        ok: true,
+        taskId,
+        matchedCount: result.matched.length,
+        closed: result.closed,
+        remaining: result.remaining,
+        cleanupStatus: result.remaining.length ? "warning" : "closed"
       });
       return;
     }
@@ -221,6 +286,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     });
+  }).finally(() => {
+    const senderWindowId = Number(_sender?.tab?.windowId || 0);
+    const shouldCloseSelfWindow = Boolean(message?.closeSelfWindow) && Number.isInteger(senderWindowId) && senderWindowId > 0;
+    if (!shouldCloseSelfWindow) {
+      return;
+    }
+    globalThis.setTimeout(() => {
+      chrome.windows.remove(senderWindowId).catch(() => {
+        // Ignore self-close failures for bridge windows.
+      });
+    }, 80);
   });
   return true;
 });

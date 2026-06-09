@@ -71,7 +71,7 @@ ORDER_COLUMN_CANDIDATES = ("订单id", "订单ID", "订单号")
 DATE_TEXTFIELD_COMMIT_KEY = "tab"
 DEFAULT_EXPORT_INTERACTION_MODE = "auto"
 DEFAULT_EXPORT_START_TIMEOUT_SECONDS = 60
-DEFAULT_QIANFAN_LONG_TASK_WINDOW_MS = 600000
+DEFAULT_QIANFAN_TASK_WINDOW_MS = 60000
 
 
 class ReviewSyncError(RuntimeError):
@@ -818,6 +818,7 @@ def export_store_via_browser_js(
         profile_directory=profile.directory,
         page_key="comments",
         cleanup_scope="owned_tabs_only",
+        auto_close_ms=DEFAULT_QIANFAN_TASK_WINDOW_MS,
     )
     payload: dict[str, Any] | None = None
     try:
@@ -893,6 +894,7 @@ def export_store_via_mouse(
         profile_directory=profile.directory,
         page_key="comments",
         cleanup_scope="owned_tabs_only",
+        auto_close_ms=DEFAULT_QIANFAN_TASK_WINDOW_MS,
     )
     pyautogui = _load_pyautogui()
     payload: dict[str, Any] | None = None
@@ -986,6 +988,7 @@ def export_store_via_ax(
         profile_directory=profile.directory,
         page_key="comments",
         cleanup_scope="owned_tabs_only",
+        auto_close_ms=DEFAULT_QIANFAN_TASK_WINDOW_MS,
     )
     payload: dict[str, Any] | None = None
     try:
