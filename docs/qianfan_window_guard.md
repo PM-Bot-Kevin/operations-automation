@@ -18,13 +18,14 @@
 ## 正式口径
 
 1. 后续千帆相关任务，默认优先检查当前 profile 有没有装这个扩展。
-2. 已安装且启用时，优先走“自建窗口登记 + 自建窗口回收”。
-3. 没装时，不把业务任务直接判失败；允许降级到现有窗口策略，但要明确记录这是降级执行。
-4. 如果是首次接入的新店铺 profile，应先在该 profile 里加载一次本地 unpacked 扩展。
-5. 后续不再允许用 macOS 菜单悬停方式探查 Chrome 设置；需要确认 `允许 Apple 事件中的 JavaScript` 时，优先读 profile `Preferences` 里的 `browser.allow_javascript_apple_events`。
-6. 任何一步如果打开了系统菜单、右键菜单或文件选择器，必须在同一步完成关闭；如果没关掉，先做收尾，不继续测。
-7. 如果为了排障强退过 Chrome，恢复前必须先清理自动化测试残留，再决定是否清理 `Singleton*` 锁文件。
-8. 现有千帆任务、后续新增千帆任务、以及后续新接入的店铺 profile，默认都要复用这套窗口守卫；只允许继续补接入，不允许再各自维护一套新关页方案。
+2. 已安装且启用时，正式开页口径固定走“插件桥接页 -> 任务页 -> 按 `task_id` 回收本轮窗口”。
+3. 插件桥接页只负责发起打开/关闭指令，发完就立即自关；正常情况下你几乎看不到它停留。
+4. 没装时，不把业务任务直接判失败；允许降级到现有窗口策略，但要明确记录这是降级执行，并提醒“这个店铺 profile 先装插件”。
+5. 如果是首次接入的新店铺 profile，应先在该 profile 里加载一次本地 unpacked 扩展。
+6. 后续不再允许用 macOS 菜单悬停方式探查 Chrome 设置；需要确认 `允许 Apple 事件中的 JavaScript` 时，优先读 profile `Preferences` 里的 `browser.allow_javascript_apple_events`。
+7. 任何一步如果打开了系统菜单、右键菜单或文件选择器，必须在同一步完成关闭；如果没关掉，先做收尾，不继续测。
+8. 如果为了排障强退过 Chrome，恢复前必须先清理自动化测试残留，再决定是否清理 `Singleton*` 锁文件。
+9. 现有千帆任务、后续新增千帆任务、以及后续新接入的店铺 profile，默认都要复用这套窗口守卫；只允许继续补接入，不允许再各自维护一套新关页方案。
 
 ## 安装方式
 
@@ -55,11 +56,18 @@ python3 scripts/check_qianfan_window_guard.py --json
 python3 scripts/check_qianfan_window_guard.py --profile-directory "Default" --json
 ```
 
+为已配置的千帆店铺统一打开插件详情页：
+
+```bash
+python3 scripts/open_qianfan_window_guard_pages.py
+```
+
 补充：
 
 - 这个检查脚本现在会一起输出 `browser_js_allowed`，用于确认当前 profile 是否开启了 Apple 事件里的页内 JavaScript。
 - 判断这个开关时，后续固定看脚本输出，不再用菜单探查。
 - 检查时不再强依赖“扩展必须装在仓库目录”；只要目标 profile 里加载的是同一份 `Qianfan Window Guard` unpacked 扩展，即使实际目录放在桌面或别的绝对路径，也会识别成已安装。
+- `scripts/open_qianfan_window_guard_pages.py` 会优先给已启用这套扩展的 profile 打开对应详情页；如果某个新店铺 profile 还没装，会退回打开 `chrome://extensions/`，提醒先安装。
 
 检查 Chrome 自动化残留：
 
@@ -82,6 +90,7 @@ bash scripts/cleanup_chrome_automation_residue.sh status
 - 扩展页现在内置两档快捷时长：`短任务 60 秒`、`长任务 10 分钟`
 - 后续真正跑店铺后台时，这里的目标地址会换成任务自己的店铺页面；`60` 秒只是默认收尾时间，不是固定死值
 - 长任务不需要以后再单独开发另一套扩展；正式口径就是继续复用这一套，只在任务启动时切到 `10` 分钟或由脚本直接传更长时长
+- 当前正式已验证：好评已上评同步链路会通过这套桥接方案自己打开评价页，并在任务完成后自己关闭任务页；状态文件里的 `cleanup_status` 也会单独记录成 `closed` / `warning`
 
 ## 异常恢复
 

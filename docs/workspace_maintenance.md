@@ -31,13 +31,15 @@
 - 如果绑定窗口已经偏离目标页或疑似被用户接管，正式口径是不强关，只记录 cleanup warning，避免误关用户正在看的页面
 - 这条正式任务结束后，cleanup 结果必须进入正式状态文件；业务结果固定单独落 `business_status`，收尾结果单独落 `cleanup_status`，页面没关上只记 warning，不把业务成功改写成失败
 - 当前仓库新增的独立窗口守卫小工具固定是 `chrome_extensions/qianfan_window_guard`；安装、检查和自测口径固定看 `docs/qianfan_window_guard.md` 与 `scripts/check_qianfan_window_guard.py`
+- 已配置千帆店铺统一打开插件详情页的正式脚本固定是 `scripts/open_qianfan_window_guard_pages.py`；后续要批量点“更新”或巡检接入状态时，默认先用它
 - 以后确认 Chrome 的 `允许 Apple 事件中的 JavaScript` 时，固定先读 profile `Preferences` 和 `scripts/check_qianfan_window_guard.py` 输出；不要再用菜单栏悬停探查
 - `scripts/check_qianfan_window_guard.py` 现在按“当前 profile 是否加载了同名 unpacked 扩展”识别安装状态，不再误把桌面或其他绝对路径里的真实扩展判成未安装
 - 以后凡是打开了系统菜单、Dock 右键菜单、文件选择器，都必须在同一步完成关闭；没有收干净前，不允许继续下一步自动化
 - 如果自动化过程中强退过 Chrome，正式恢复顺序固定是：先跑 `bash scripts/cleanup_chrome_automation_residue.sh cleanup` 清测试残留，再判断是否需要清理陈旧 `Singleton*`，最后才重开用户资料窗口
 - 后续千帆任务的“自己开的窗口自己关”能力，默认优先向这套 `Qianfan Window Guard` 收敛；不要继续扩散新的标签页猜测或盲关逻辑
-- `scripts/xhs_qianfan_session.py` 目前仍作为现有业务脚本里的过渡收尾层保留，但不再视为唯一长期关窗主线
+- `scripts/xhs_qianfan_session.py` 现在的正式开页主口径固定是“插件桥接页打开任务页、桥接页立即自关、收尾再按 `task_id` 回收本轮窗口”；老的直接开页只保留降级兜底
 - 现有千帆任务、后续新增千帆任务、以及后续新增店铺或新增 Chrome 资料，默认都必须复用这套公共关页能力；先补资料映射和扩展接入，不允许各自再维护一套新逻辑
+- 后续如果新增千帆店铺 profile，没有安装或没启用 `Qianfan Window Guard` 时，正式口径必须明确提醒先装插件；不能静默回退后假装已经接入长期方案
 - 这条正式任务即使从 `current` 入口执行，运行状态、计划文件和导出缓存也必须固定回写根目录共享 `runtime/`，不要落到发布快照自己的 `current/runtime`
 - 如果同一轮里既有漏上评结果又有 SKU 失败，通知要优先合并成一条，标题固定 `好评漏上评&填sku_自动任务`；如果只有 SKU 失败，标题固定 `好评sku填写_自动任务`
 

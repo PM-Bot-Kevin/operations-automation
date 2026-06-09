@@ -241,9 +241,10 @@ bash scripts/install_review_status_launchagent.sh
 - 如果绑定窗口已经偏离目标页或疑似被你手动接管，正式口径是不强关，只把这轮记成 cleanup warning，避免误关你正在看的页面
 - cleanup 结果现在会进入正式状态文件；业务结果固定单独落 `business_status`，收尾结果单独落 `cleanup_status`，页面没关上只记 warning，不把任务通知成失败
 - 当前仓库另外新增了独立的窗口守卫小工具：扩展目录固定是 `chrome_extensions/qianfan_window_guard`，检查脚本固定是 `scripts/check_qianfan_window_guard.py`，说明文档固定看 [docs/qianfan_window_guard.md](/Users/luogic/Code/运营自动化/docs/qianfan_window_guard.md)
-- 这套 `Qianfan Window Guard` 只负责“自己开的窗口自己关”，不负责找控件、不负责业务取数；后续千帆任务的窗口回收应优先向这套能力收敛
-- `scripts/xhs_qianfan_session.py` 目前仍是现有业务脚本里的过渡收尾层，但不再把它单独视为唯一长期关窗主线
+- 这套 `Qianfan Window Guard` 只负责“自己开的窗口自己关”，不负责找控件、不负责业务取数；当前正式开页口径固定是“插件桥接页打开任务页、桥接页立即自关、收尾再按 `task_id` 回收本轮窗口”
+- 已配置千帆店铺如果要统一打开插件详情页点“更新”，固定走 `python3 scripts/open_qianfan_window_guard_pages.py`
 - 现有千帆任务、后续新增千帆任务、以及后续新接入的店铺资料，默认都要复用这一套公共关页能力；不允许每个任务各自维护一套新的开页/关页逻辑
+- 如果后续新开店铺 profile 没装或没启用这套插件，正式口径必须先提醒补装，再把该店铺接入长期方案
 - 如果全部命中并成功回写，就不需要额外打扰用户；如果有订单没找到、导出失败、回写失败或页面异常，必须明确通知，不能静默失败
 - 涉及千帆后台时，依然继续复用 [docs/xhs_qianfan_safety.md](/Users/luogic/Code/运营自动化/docs/xhs_qianfan_safety.md) 和 [config/xhs_qianfan_guardrails.json](/Users/luogic/Code/运营自动化/config/xhs_qianfan_guardrails.json) 里的极度保守口径
 - 在 Codex 里使用这个工作区时，如果你直接说“帮我同步已上评”或类似意思，助手应直接按这套流程执行，不要再临时发明别的链路

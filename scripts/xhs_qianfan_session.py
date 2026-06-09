@@ -17,6 +17,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from xhs_qianfan_access import (
     CHROME_APP_NAME,
     PAGE_URLS,
+    QianfanAccessError,
     activate_tab_by_id,
     close_guarded_task_windows,
     close_new_windows_for_url_ax,
@@ -364,11 +365,21 @@ def open_page_for_session(
             f"已通过窗口守卫拉起独立窗口：{profile.directory} / {session.page_key} / "
             f"task={session.task_id}"
         )
+    except QianfanAccessError as exc:
+        session.guard_managed = False
+        session.guard_extension_id = ""
+        session.launch_strategy = "guard_missing_fallback"
+        emit(
+            "当前店铺 profile 还没接入或没启用 Qianfan Window Guard，"
+            f"已临时回退直接开页：{exc}。后续新增店铺 profile 时，请先安装这个插件。"
+        )
+        open_page(profile, session.page_key, dry_run=False)
+        emit(f"已为本轮任务拉起独立窗口：{profile.directory} / {session.page_key}")
     except Exception as exc:
         session.guard_managed = False
         session.guard_extension_id = ""
         session.launch_strategy = "owned_window_per_task"
-        emit(f"窗口守卫不可用，回退直接开页：{exc}")
+        emit(f"窗口守卫暂时不可用，回退直接开页：{exc}")
         open_page(profile, session.page_key, dry_run=False)
         emit(f"已为本轮任务拉起独立窗口：{profile.directory} / {session.page_key}")
     owned_tabs = _wait_for_new_owned_tabs(session, log_step=log_step)

@@ -93,9 +93,11 @@ zsh scripts/maintenance/refresh_secret_recovery_bundle.sh
 - 如果绑定窗口已经偏离目标页或疑似被用户接管，正式口径是不强关，只记录 cleanup warning，避免误关用户正在看的页面。
 - cleanup 结果现在会进入正式状态文件；业务结果单独落 `business_status`，收尾结果单独落 `cleanup_status`，页面没关上只记 warning，不把任务通知成失败。
 - 当前仓库另外新增了独立窗口守卫小工具 `Qianfan Window Guard`：扩展目录固定是 `chrome_extensions/qianfan_window_guard`，检查脚本固定是 `scripts/check_qianfan_window_guard.py`，使用说明固定看 `docs/qianfan_window_guard.md`。
+- 已配置千帆店铺如果要统一打开插件详情页点“更新”，正式脚本固定走 `python3 scripts/open_qianfan_window_guard_pages.py`。
 - 后续如果问题落在“自己开的窗口没有自己关”，先检查目标 profile 是否已加载这套本地 unpacked 扩展；这一步优先级高于继续追加新的 AppleScript 猜测逻辑。
-- `scripts/xhs_qianfan_session.py` 目前仍是现有业务脚本里的过渡收尾层，但不再视为唯一长期关窗主线；后续共用能力应逐步向窗口守卫收敛。
+- `scripts/xhs_qianfan_session.py` 现在的正式开页主口径固定是“插件桥接页打开任务页、桥接页立即自关、收尾按 `task_id` 回收本轮窗口”；老的直接开页只保留降级兜底。
 - 现有千帆任务、后续新增千帆任务、以及后续新接入的店铺 profile，默认都要接到这套公共关页能力上；禁止继续各自维护一套独立的关窗逻辑。
+- 后续如果新增店铺 profile 而窗口守卫还没接入，必须明确提醒先安装 `Qianfan Window Guard`，不能静默回退后假装已经纳入长期方案。
 - 这条任务即使通过 `current` 正式入口执行，计划文件、状态文件和导出缓存也必须继续写回工作区根目录共享 `runtime/`，不要在发布快照里生成另一套 `current/runtime`。
 - 这条已上评同步链路的千帆侧执行同样必须遵守极度保守风控规则：只做最小操作、只走导出链路、保持低频和不规则停顿。
 

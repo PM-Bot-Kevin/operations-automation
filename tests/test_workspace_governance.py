@@ -28,6 +28,7 @@ RUN_REVIEW_STATUS_SCRIPT = REPO_ROOT / "scripts" / "run_review_status_sync.py"
 RUN_SKU_AUTO_SCRIPT = REPO_ROOT / "scripts" / "run_sku_fill_auto.py"
 RUN_REVIEW_DAILY_OPS_SCRIPT = REPO_ROOT / "scripts" / "run_review_daily_ops.py"
 CHECK_QIANFAN_WINDOW_GUARD_SCRIPT = REPO_ROOT / "scripts" / "check_qianfan_window_guard.py"
+OPEN_QIANFAN_WINDOW_GUARD_PAGES_SCRIPT = REPO_ROOT / "scripts" / "open_qianfan_window_guard_pages.py"
 CONFIG_PATH = REPO_ROOT / "config" / "workspace_governance.json"
 QIANFAN_GUARDRAILS_PATH = REPO_ROOT / "config" / "xhs_qianfan_guardrails.json"
 ORDER_PAGE_SCRIPT = REPO_ROOT / "scripts" / "xhs_qianfan_order_page.py"
@@ -711,6 +712,41 @@ class WorkspaceGovernanceTests(unittest.TestCase):
             ],
         )
 
+    def test_qianfan_session_open_page_reminds_install_when_guard_missing(self) -> None:
+        access_module = load_module("xhs_qianfan_access_guard_missing", QIANFAN_ACCESS_SCRIPT)
+        session_module = load_module("xhs_qianfan_session_guard_missing", QIANFAN_SESSION_SCRIPT)
+
+        session = session_module.QianfanTaskSession(
+            session_id="session-guard-missing",
+            task_id="task-guard-missing",
+            app_name=access_module.CHROME_APP_NAME,
+            profile_directory="Profile 40",
+            page_key="comments",
+            target_url_contains=access_module.PAGE_URLS["comments"],
+            baseline_tabs=[],
+        )
+        logs: list[str] = []
+
+        with (
+            mock.patch.object(
+                session_module,
+                "open_guarded_page",
+                side_effect=session_module.QianfanAccessError("当前 profile 未启用 Qianfan Window Guard：Profile 40"),
+            ),
+            mock.patch.object(session_module, "open_page") as open_page_mock,
+            mock.patch.object(session_module, "list_tab_descriptors", return_value=[]),
+        ):
+            session_module.open_page_for_session(
+                session,
+                profile=mock.Mock(directory="Profile 40"),
+                title_hint="新店铺",
+                log_step=logs.append,
+            )
+
+        open_page_mock.assert_called_once_with(mock.ANY, "comments", dry_run=False)
+        self.assertEqual(session.launch_strategy, "guard_missing_fallback")
+        self.assertTrue(any("请先安装这个插件" in item for item in logs))
+
     def test_qianfan_session_cleanup_closes_only_owned_tab(self) -> None:
         access_module = load_module("xhs_qianfan_access", QIANFAN_ACCESS_SCRIPT)
         session_module = load_module("xhs_qianfan_session", QIANFAN_SESSION_SCRIPT)
@@ -861,6 +897,30 @@ class WorkspaceGovernanceTests(unittest.TestCase):
         self.assertFalse(cleanup["skipped"])
         self.assertEqual(cleanup["cleanup_status"], "closed")
         self.assertEqual(cleanup["strategy"], "guard_bridge")
+
+    def test_open_qianfan_window_guard_pages_loads_unique_profiles_from_config(self) -> None:
+        module = load_module("open_qianfan_window_guard_pages", OPEN_QIANFAN_WINDOW_GUARD_PAGES_SCRIPT)
+
+        with tempfile.TemporaryDirectory(prefix="guard-pages-config-") as temp_dir:
+            config_path = Path(temp_dir) / "xhs_order_query_profiles.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "stores": [
+                            {"store_name": "抱树", "profile_directory": "Profile 32"},
+                            {"store_name": "朝仓", "profile_directory": "Profile 34"},
+                            {"store_name": "抱树2", "profile_directory": "Profile 32"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                module.load_profile_directories(config_path),
+                ["Profile 32", "Profile 34"],
+            )
 
     def test_review_status_cleanup_warning_keeps_business_success(self) -> None:
         module = load_module("run_review_status_sync", RUN_REVIEW_STATUS_SCRIPT)
